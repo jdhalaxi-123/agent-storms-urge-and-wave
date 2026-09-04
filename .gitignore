@@ -1,6 +1,7 @@
 # ===== 密钥/凭证（绝对不要上传） =====
 .env
 .env.*
+!.env.example
 腾讯云key.csv
 *.key.csv
 github-recovery-codes.txt

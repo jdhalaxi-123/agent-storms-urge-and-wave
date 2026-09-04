@@ -49,13 +49,15 @@ stormsurgeagent/
 ```bash
 cd stormsuregent
 pip install -r requirements.txt
+copy .env.example .env      # 填入自己的 DeepSeek / 腾讯云密钥
+python scripts/make_sample_data.py   # 一键生成样例 NC 数据（约30MB，可选）
 python main.py
 ```
 
 浏览器打开 http://localhost:7860 ，输入：
 `帮我看未来5天厦门海域有没有风暴潮海水倒灌风险`
 
-骨架阶段返回的是 stub 假结果（演示链路跑通）。
+运行说明详见 `部署运行说明.md`；无密钥/无数据时自动降级为骨架演示（stub 假结果，链路跑通）。
 
 ## 模块如何接入
 
