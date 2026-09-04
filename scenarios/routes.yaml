@@ -1,0 +1,24 @@
+# 场景路由表：槽位(灾种 × 数据源 × 预警级别) → 模块实现标识
+# 骨架阶段用占位标识；真实实现交付后，替换为具体模块路径/实现名。
+storm_surge:
+  数值模式:
+    impls:
+      assess: "storm_surge.num"
+      brief: "storm_surge.num"
+      visualize: "storm_surge.num"
+  智能预报:
+    impls:
+      assess: "storm_surge.ai"
+      brief: "storm_surge.ai"
+      visualize: "storm_surge.ai"
+wave:
+  数值模式:
+    impls:
+      assess: "wave.num"
+      brief: "wave.num"
+      visualize: "wave.num"
+  智能预报:
+    impls:
+      assess: "wave.ai"
+      brief: "wave.ai"
+      visualize: "wave.ai"

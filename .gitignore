@@ -1,0 +1,45 @@
+# ===== 密钥/凭证（绝对不要上传） =====
+.env
+.env.*
+腾讯云key.csv
+*.key.csv
+github-recovery-codes.txt
+*.pem
+*.ppk
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.python-version
+*.egg-info/
+
+# ===== 大数据文件（GitHub 单文件限100MB，勿上传） =====
+data/
+*.nc
+*.nc4
+*.grib
+*.grib2
+*.rar
+*.zip
+*.7z
+
+# ===== 业务材料（暂不上传） =====
+厦门中心简报材料/
+
+# ===== 输出产物 =====
+outputs/
+
+# ===== 临时/系统 =====
+*.log
+.DS_Store
+Thumbs.db
+_tmp_*
+_archive_extract/
+_extract_log.txt
+_git_installer.exe
+
+# ===== VS Code =====
+.vscode/*
+!.vscode/settings.json
