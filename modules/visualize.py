@@ -1,12 +1,30 @@
 """模块⑤ 可视化：生成图表。
 
-【STUB】骨架阶段尝试用 matplotlib 画占位图；无 matplotlib 时返回空列表（只出文字）。
+真实实现：按 geo_stats 的站点统计画「多站点增水过程曲线」，
+叠加预警阈值线(30/50/80/120cm)与峰值标注；无数据时降级返回空。
 """
 from pathlib import Path
+from typing import Any, Dict
 
 from orchestrator.contract import ModuleContext
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "outputs"
+
+THRESH_LINES = [(30, "蓝色"), (50, "黄色"), (80, "橙色"), (120, "红色")]
+
+
+def _setup_cn_font() -> None:
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib import font_manager
+
+        for fam in ("Microsoft YaHei", "SimHei", "KaiTi", "FangSong"):
+            if any(f.name == fam for f in font_manager.fontManager.ttflist):
+                plt.rcParams["font.sans-serif"] = [fam]
+                plt.rcParams["axes.unicode_minus"] = False
+                break
+    except Exception:
+        pass
 
 
 def run(ctx: ModuleContext) -> ModuleContext:
@@ -15,29 +33,48 @@ def run(ctx: ModuleContext) -> ModuleContext:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from matplotlib import font_manager
 
-        # 中文字体：Windows 常见字体回退（SimHei / Microsoft YaHei）
-        for fam in ("Microsoft YaHei", "SimHei", "KaiTi", "FangSong"):
-            if any(f.name == fam for f in font_manager.fontManager.ttflist):
-                plt.rcParams["font.sans-serif"] = [fam]
-                plt.rcParams["axes.unicode_minus"] = False
-                break
+        _setup_cn_font()
 
-        series = ctx.results.get("geo_stats", {}).get("series", [])
+        geo = ctx.results.get("geo_stats", {}) or {}
+        sites = geo.get("sites") or []
+        region = geo.get("region") or "目标海域"
+
+        if not sites:
+            ctx.results["visualize"] = {"images": images}
+            return ctx
+
         OUT_DIR.mkdir(parents=True, exist_ok=True)
-        path = OUT_DIR / "surge_series_stub.png"
+        path = OUT_DIR / "surge_series_real.png"
 
-        plt.figure(figsize=(6, 3))
-        plt.plot(series, marker="o")
-        plt.title("增水过程曲线（占位）")
-        plt.xlabel("预报时次")
-        plt.ylabel("增水(cm)")
-        plt.savefig(path, dpi=100)
-        plt.close()
+        fig, ax = plt.subplots(figsize=(10, 4.8), dpi=110)
+        colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e"]
+        for si, s in enumerate(sites[:5]):
+            series = s.get("series", [])
+            if not series:
+                continue
+            ax.plot(series, marker=None, lw=1.4, label=s["name"], color=colors[si % len(colors)])
+            kmax = int(series.index(max(series))) if hasattr(series, "index") else 0
+            vmax = max(series) if series else 0
+            ax.annotate(f"{s['name']} {vmax:.0f}cm", (kmax, vmax),
+                        textcoords="offset points", xytext=(4, 5), fontsize=8, color=colors[si % len(colors)])
+
+        # 阈值线
+        for th, lab in THRESH_LINES:
+            ax.axhline(th, ls="--", lw=0.8, alpha=0.6)
+            ax.text(0.005, th, f"{lab} {th}cm", va="bottom", ha="left", fontsize=7, alpha=0.7, transform=ax.get_yaxis_transform())
+
+        ax.set_title(f"{region} 站点风暴潮增水过程曲线（模拟/真实数据）")
+        ax.set_xlabel("过程时次（降采样）")
+        ax.set_ylabel("增水 (cm)")
+        ax.legend(loc="upper left", fontsize=8)
+        ax.grid(alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(path)
+        plt.close(fig)
         images.append(str(path))
     except Exception:
-        pass  # 无 matplotlib 时跳过，只返回文字
+        pass  # 画图失败不影响文字
 
     ctx.results["visualize"] = {"images": images}
     return ctx

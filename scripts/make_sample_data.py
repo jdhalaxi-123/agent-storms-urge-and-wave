@@ -46,12 +46,12 @@ def make_surge_file(path: Path, with_forcing: bool, seed: int) -> None:
     # 模拟增水：低频波动 + 台风过境信号（42h 附近抬升）
     def surge_series(t, amp):
         # 主体：昼夜潮周期(12.42h) + 台风增水包络(3天)
-        tide = 0.8 * np.sin(2 * np.pi * t / (12.42 * 3600) + 0.3)
+        tide = 0.15 * np.sin(2 * np.pi * t / (12.42 * 3600) + 0.3)
         storm = amp * np.exp(-((t - 42 * 3600) ** 2) / (2 * (30 * 3600) ** 2))
         return tide + storm
 
     t_axis = (time - time[0])
-    base = surge_series(t_axis, 1.2)
+    base = surge_series(t_axis, 0.55)
 
     # elev（粗网格）：时间 × 纬度 × 经度，加空间扰动
     elev = (base[:, None, None]
