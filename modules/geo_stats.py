@@ -1,58 +1,211 @@
-"""模块② 地理信息提取 · NC 插值 · 统计分析。
+"""模块② 地理信息提取 · 站点统计。
 
-真实实现：
-    1. 从 ctx.files 取风暴潮场 NC（数值/融合均可）；
-    2. 自动识别变量：优先 elevs(精细网格,厦门附近)，回退 elev(粗网格)；
-    3. 对目标海域站点(厦门港/同安湾/东山等) 最近网格点采样时间序列；
-    4. 统计：最大增水(cm)、峰值时刻、过程曲线(降采样)、是否超阈。
+数据源优先级（越靠前越准）：
+    ① 单点站点数据（ocr_forecast / storm_surge_forecast_sp_*, 按站组织, 含权威坐标）
+    ② 网格风暴潮场（elevs 细网格 → elev 粗网格, 站点最近点采样）
 
 输出 ctx.results["geo_stats"]：
     {
         "status": "ok" | "no_data",
+        "source": "station" | "grid" | "none",
         "source_file": str,
         "sites": [{"name","lon","lat","max_surge_cm","peak_idx","peak_time","series"}],
-        "max_surge_cm": float,          # 全区最大的站点值
-        "peak_time": str,               # 对应时刻
-        "series": [...],                # 主站(厦门港)过程曲线
-        "region": str,
+        "max_surge_cm": float,   # 全区最大站点值
+        "peak_time": str, "peak_site": str,
+        "series": [...], "region": str,
     }
 """
 from __future__ import annotations
 
-import json
+import datetime
+import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 from orchestrator.contract import ModuleContext
 
-# 站点表（名称 -> 经纬度）。厦门中心关注的重点站位，后续可用站点文件覆盖。
+# 权威站点坐标（来自 2526 单点数据 ocr_forecast 的 longitude/latitude）
 SITES: Dict[str, tuple] = {
-    "厦门港": (118.07, 24.45),
-    "同安湾": (118.15, 24.55),
-    "东山东港": (117.42, 23.70),
-    "石狮": (118.72, 24.82),
-    "漳浦": (117.62, 23.99),
+    "厦门(XMN)": (118.25, 24.50),
+    "崇武(CWU)": (119.00, 25.00),
+    "晋江(JNJ)": (118.50, 24.50),
+    "东山东港(DSN)": (117.50, 23.75),
 }
 
-# 预警级别阈值（增水 cm）：按国标风暴潮增水经验阈值，可参数化
-THRESHOLDS = {"黄色": 50.0, "橙色": 80.0, "红色": 120.0}
+# 单点数据站名缩写 -> 中文
+STATION_CN = {"XMN": "厦门", "CWU": "崇武", "JNJ": "晋江", "DSN": "东山东港"}
+
+# 预警级别阈值（增水 cm）
+THRESHOLDS = {"蓝色": 30.0, "黄色": 50.0, "橙色": 80.0, "红色": 120.0}
 
 
-def _find_variable(ds, candidates: List[str]) -> Optional[str]:
-    """按候选名找存在的变量。"""
-    for c in candidates:
-        if c in ds.variables:
-            return c
-    return None
+def _fmt_time(t_val: Any, base: Optional[str] = None) -> str:
+    """把时间值格式化为字符串。
+
+    支持：datetime64 / datetime / 相对小时(0~200) / matlab日序数(27000+) / 纳秒时间戳。
+    """
+    try:
+        if hasattr(t_val, "astype") and "datetime64" in str(getattr(t_val, "dtype", "")):
+            t_val = t_val.astype("datetime64[s]").item()
+        elif hasattr(t_val, "item"):
+            t_val = t_val.item()
+        if isinstance(t_val, np.datetime64):
+            t_val = t_val.astype("datetime64[s]").item()
+        if isinstance(t_val, (datetime.datetime, datetime.date)):
+            return t_val.strftime("%m-%d %H:%M") if isinstance(t_val, datetime.datetime) else t_val.strftime("%m-%d")
+        if isinstance(t_val, (int, float)):
+            v = float(t_val)
+            if abs(v) < 200:  # 相对小时（0~167）
+                if base:
+                    return (datetime.datetime.strptime(base, "%Y-%m-%d") + datetime.timedelta(hours=v)).strftime("%m-%d %H:%M")
+                return f"第{v:.0f}小时"
+            if 27000 < v < 100000:  # matlab datenum 日序数
+                # matlab datenum 起点 0000-01-01; 需用 delta 换算(相对 2025-11-08 已知偏移)
+                # 直接按 1 天=1 换算 + 已知 27705.0=2025-11-08
+                base_dt = datetime.datetime(2025, 11, 8) - datetime.timedelta(days=27705.0)
+                return (base_dt + datetime.timedelta(days=v)).strftime("%m-%d %H:%M")
+            if 10**17 < abs(v) < 10**19:  # 纳秒时间戳
+                return datetime.datetime.fromtimestamp(v / 1e9).strftime("%m-%d %H:%M")
+    except Exception:
+        pass
+    return str(t_val)
+
+
+# --------------------------------------------------------------------------- #
+# ① 单点数据读取
+# --------------------------------------------------------------------------- #
+# 只读"当前台风"的单点文件：排除历史台风目录与 _new 后缀重复文件
+def _pick_station_files(paths: List[str], typhoon: str = "") -> List[str]:
+    """选出当前台风的主单点文件（优先 ocn_forecast / storm_surge_stations）。"""
+    if not paths:
+        return []
+    # 优先级：文件名含 ocn_forecast > storm_surge_stations > storm_surge_forecast_sp
+    def rank(p: str) -> int:
+        base = os.path.basename(p).lower()
+        if "_new" in base:
+            return 30  # 排除 _new 重复
+        if "ocn_forecast" in base:
+            return 0
+        if "storm_surge_stations" in base:
+            return 1
+        if "storm_surge_forecast_sp" in base:
+            return 2
+        return 10
+    if typhoon:
+        # 只保留当前台风目录下的
+        tp = [p for p in paths if typhoon in p.replace("\\", "/")]
+        if tp:
+            paths = tp
+    return sorted(paths, key=rank)[:3]
+
+
+def _read_station_data(paths: List[str]) -> List[Dict[str, Any]]:
+    """从单点 NC(ocr_forecast/sp_*) 读站点序列（主文件优先）。"""
+    import xarray as xr
+
+    results: List[Dict[str, Any]] = []
+    for path in paths[:1]:  # 只读第一优先级的主文件，避免多文件混读
+        try:
+            ds = xr.open_dataset(path, decode_times=False)
+        except Exception:
+            continue
+        try:
+            var = "surge" if "surge" in ds.variables else ("storm_surge" if "storm_surge" in ds.variables else None)
+            if var is None:
+                continue
+            data = ds[var].values
+            multi = data.ndim == 2
+            stations = list(ds["station"].values) if multi and "station" in ds.coords else []
+            lons = ds["longitude"].values if "longitude" in ds.variables else None
+            lats = ds["latitude"].values if "latitude" in ds.variables else None
+            if not multi:
+                lon = float(np.asarray(ds["longitude"].values).ravel()[0]) if "longitude" in ds.variables else None
+                lat = float(np.asarray(ds["latitude"].values).ravel()[0]) if "latitude" in ds.variables else None
+                import re
+                m = re.search(r"sp_([A-Z]+)", path)
+                code = m.group(1) if m else "ST"
+                results.append({
+                    "name": STATION_CN.get(code, code), "code": code,
+                    "lon": lon, "lat": lat,
+                    "series_cm": np.asarray(data).ravel().tolist(),
+                    "source_file": str(path),
+                })
+            else:
+                for i, st in enumerate(stations):
+                    code = str(st).strip() if not isinstance(st, (list, np.ndarray)) else str(np.asarray(st).item())
+                    lo = float(np.asarray(lons[i])) if lons is not None and i < len(lons) else None
+                    la = float(np.asarray(lats[i])) if lats is not None and i < len(lats) else None
+                    results.append({
+                        "name": STATION_CN.get(code, code), "code": code,
+                        "lon": lo, "lat": la,
+                        "series_cm": np.asarray(data[:, i]).ravel().tolist(),
+                        "source_file": str(path),
+                    })
+            ds.close()
+        except Exception:
+            try:
+                ds.close()
+            except Exception:
+                pass
+            continue
+    return results
+
+
+def _merge_stations(stations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """合并同名站点（多文件/多时次取数据最长者）。"""
+    merged: Dict[str, Dict[str, Any]] = {}
+    for s in stations:
+        key = s.get("code") or s.get("name")
+        if key not in merged or len(s["series_cm"]) > len(merged[key]["series_cm"]):
+            merged[key] = s
+    return list(merged.values())
+
+
+# --------------------------------------------------------------------------- #
+# ② 网格数据读取
+# --------------------------------------------------------------------------- #
+def _read_grid_data(path: str) -> List[Dict[str, Any]]:
+    import xarray as xr
+
+    try:
+        ds = xr.open_dataset(path)
+    except Exception:
+        return []
+    try:
+        var = "elevs" if "elevs" in ds.variables else ("elev" if "elev" in ds.variables else None)
+        if var is None:
+            return []
+        time = ds["time"].values if "time" in ds.coords else None
+        sites = []
+        for name, (lon_p, lat_p) in SITES.items():
+            try:
+                ts = _sample_at(ds, var, lon_p, lat_p)
+                valid = np.asarray(ts)[~np.isnan(np.asarray(ts, dtype=float))]
+                if len(valid) == 0:
+                    continue
+                peak = int(np.nanargmax(np.asarray(ts, dtype=float)))
+                peak_time = _fmt_time(time[peak]) if time is not None else ""
+                sites.append({
+                    "name": name, "code": "", "lon": lon_p, "lat": lat_p,
+                    "max_surge_cm": round(float(np.nanmax(valid)) * 100.0, 1),
+                    "peak_idx": peak, "peak_time": peak_time,
+                    "series_cm": [round(float(v) * 100.0, 1) for v in np.asarray(ts, dtype=float)[:: max(1, len(ts) // 30)]],
+                    "source_file": str(path),
+                })
+            except Exception:
+                continue
+        return sites
+    finally:
+        ds.close()
 
 
 def _sample_at(ds, var: str, lon_pt: float, lat_pt: float) -> np.ndarray:
-    """在 2D 网格(lats/lons)上取最近点的时间序列。"""
+    """在 2D 网格(lons/lats)上取最近点的时间序列。"""
     lons = ds["lons"].values if "lons" in ds.coords or "lons" in ds.variables else None
     lats = ds["lats"].values if "lats" in ds.coords or "lats" in ds.variables else None
     if lons is None or lats is None:
-        # 粗网格：用 lon/lat 1D 坐标
+        # 粗网格：1D 坐标
         lon_1d = ds["lon"].values
         lat_1d = ds["lat"].values
         i = int(np.abs(lon_1d - lon_pt).argmin())
@@ -60,102 +213,77 @@ def _sample_at(ds, var: str, lon_pt: float, lat_pt: float) -> np.ndarray:
         return ds[var].isel(lat=j, lon=i).values
     d2 = (lons - lon_pt) ** 2 + (lats - lat_pt) ** 2
     j, i = np.unravel_index(int(np.argmin(d2)), d2.shape)
-    return ds[var].isel(lats=j, lons=i).values if "lats" in ds[var].dims else ds[var].isel(lat=j, lon=i).values
+    if "lats" in ds[var].dims:
+        return ds[var].isel(lats=j, lons=i).values
+    return ds[var].isel(lat=j, lon=i).values
 
 
-def _fmt_time(t_val: Any, base: str = "2025-11-08") -> str:
-    """把时间值格式化为字符串。
-
-    支持两种形态：
-      - numpy datetime64 / datetime.datetime（CF 解码后）
-      - float 相对秒（真实数据 time=300/3900/... 秒，自起始时刻）
-    """
-    import datetime
-
-    try:
-        if hasattr(t_val, "astype") and "datetime64" in str(getattr(t_val, "dtype", "")):
-            t_val = t_val.astype("datetime64[s]")
-            t_val = t_val.astype(datetime.datetime)
-        elif hasattr(t_val, "item"):
-            t_val = t_val.item()
-        if isinstance(t_val, np.datetime64):
-            t_val = t_val.astype("datetime64[s]").item()
-        if isinstance(t_val, datetime.datetime):
-            return t_val.strftime("%m-%d %H:%M")
-        if isinstance(t_val, (int, float)):
-            if abs(t_val) < 10**7:  # 相对秒（7天内≈60万）
-                base_dt = datetime.datetime.strptime(base, "%Y-%m-%d")
-                return (base_dt + datetime.timedelta(seconds=float(t_val))).strftime("%m-%d %H:%M")
-            if 10**17 < abs(t_val) < 10**19:  # 纳秒时间戳（datetime64[ns]）
-                return datetime.datetime.fromtimestamp(float(t_val) / 1e9).strftime("%m-%d %H:%M")
-    except Exception:
-        pass
-    return str(t_val)
+def _finalize(sites: List[Dict[str, Any]], region: str, source: str, source_file: str) -> Dict[str, Any]:
+    """汇总统计。"""
+    if not sites:
+        return {"status": "no_data", "source": "none", "sites": [], "series": []}
+    # 从文件名推断起始日期（如 ocn_forecast_20251110-20251116.nc -> 2025-11-10 00:00）
+    base_dt = None
+    import re
+    m = re.search(r"(\d{8})-(\d{8})", os.path.basename(source_file))
+    if m:
+        try:
+            base_dt = datetime.datetime.strptime(m.group(1), "%Y%m%d")
+        except Exception:
+            base_dt = None
+    for s in sites:
+        if "series_cm" in s and s.get("max_surge_cm") is None:
+            arr = np.asarray(s["series_cm"], dtype=float)
+            if len(arr):
+                s["max_surge_cm"] = round(float(np.nanmax(arr)), 1)
+                peak = int(np.nanargmax(arr))
+                s["peak_idx"] = peak
+                if base_dt:
+                    peak_dt = base_dt + datetime.timedelta(hours=peak)
+                    s["peak_time"] = peak_dt.strftime("%m-%d %H:%M")
+                    s["peak_date"] = peak_dt.strftime("%Y-%m-%d")
+                else:
+                    s["peak_time"] = f"第{peak}时次"
+                s["series"] = arr.tolist()
+    top = max(sites, key=lambda s: s.get("max_surge_cm", -1e9))
+    # 站点序列(统一30点降采样)
+    for s in sites:
+        arr = np.asarray(s.get("series_cm") or s.get("series") or [], dtype=float)
+        if len(arr):
+            s["series"] = arr[:: max(1, len(arr) // 30)].round(1).tolist()
+    return {
+        "status": "ok",
+        "source": source,
+        "source_file": source_file,
+        "region": region,
+        "sites": sites,
+        "max_surge_cm": top.get("max_surge_cm", 0.0),
+        "peak_time": top.get("peak_time", ""),
+        "peak_date": top.get("peak_date", ""),
+        "peak_site": top.get("name", ""),
+        "series": sites[0].get("series", []),
+        "site_count": len(sites),
+    }
 
 
 def run(ctx: ModuleContext) -> ModuleContext:
-    import xarray as xr
+    region = ctx.request.get("region", "未知海域")
+    typhoon = ctx.results.get("meta", {}).get("typhoon", "") or ""
 
-    path = ctx.files.get("nc_forecast_num") or (
-        ctx.files.get("surge_files") or [None]
-    )[0]
-    if not path:
-        ctx.results["geo_stats"] = {"status": "no_data", "sites": [], "series": []}
+    # ① 单点数据优先（只取当前台风的主文件）
+    paths = _pick_station_files(ctx.files.get("station_files") or [], typhoon)
+    sites = _read_station_data(paths) if paths else []
+    if sites:
+        ctx.results["geo_stats"] = _finalize(sites, region, "station", paths[0] if paths else "")
         return ctx
 
-    try:
-        ds = xr.open_dataset(path)
-    except Exception as exc:
-        ctx.results["geo_stats"] = {"status": "no_data", "error": str(exc), "sites": [], "series": []}
-        return ctx
-
-    try:
-        # 变量自动识别：精细网格优先
-        var = _find_variable(ds, ["elevs", "elev"])
-        if var is None:
-            ctx.results["geo_stats"] = {"status": "no_data", "error": "找不到 elev/elevs 变量", "sites": []}
+    # ② 网格数据兜底
+    grid_path = ctx.files.get("nc_forecast_num") or (ctx.files.get("surge_files") or [None])[0]
+    if grid_path:
+        sites = _read_grid_data(grid_path)
+        if sites:
+            ctx.results["geo_stats"] = _finalize(sites, region, "grid", grid_path)
             return ctx
 
-        time = ds["time"].values
-        sites: List[Dict[str, Any]] = []
-        for name, (lon_p, lat_p) in SITES.items():
-            ts = _sample_at(ds, var, lon_p, lat_p)
-            valid = ts[~np.isnan(ts)] if np.issubdtype(np.asarray(ts).dtype, np.number) else ts
-            if len(valid) == 0:
-                continue
-            # 最大增水(cm)。注意 elev 单位:米 -> 厘米
-            max_val_m = float(np.nanmax(valid))
-            peak_idx = int(np.nanargmax(valid))
-            max_cm = round(max_val_m * 100.0, 1)
-            series = [round(float(v * 100.0), 1) for v in np.asarray(valid)[:: max(1, len(valid) // 30)]]
-            sites.append({
-                "name": name,
-                "lon": lon_p,
-                "lat": lat_p,
-                "max_surge_cm": max_cm,
-                "peak_idx": peak_idx,
-                "peak_time": _fmt_time(float(time[peak_idx])),
-                "series": series,
-            })
-
-        if not sites:
-            ctx.results["geo_stats"] = {"status": "no_data", "sites": [], "series": []}
-            return ctx
-
-        # 全区最大
-        top = max(sites, key=lambda s: s["max_surge_cm"])
-        ctx.results["geo_stats"] = {
-            "status": "ok",
-            "source_file": str(path),
-            "variable": var,
-            "region": ctx.request.get("region"),
-            "sites": sites,
-            "max_surge_cm": top["max_surge_cm"],
-            "peak_time": top["peak_time"],
-            "peak_site": top["name"],
-            "series": sites[0]["series"],
-            "site_count": len(sites),
-        }
-        return ctx
-    finally:
-        ds.close()
+    ctx.results["geo_stats"] = {"status": "no_data", "source": "none", "sites": [], "series": []}
+    return ctx

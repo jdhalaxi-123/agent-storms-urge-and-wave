@@ -39,6 +39,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         geo = ctx.results.get("geo_stats", {}) or {}
         sites = geo.get("sites") or []
         region = geo.get("region") or "目标海域"
+        src = geo.get("source", "")
 
         if not sites:
             ctx.results["visualize"] = {"images": images}
@@ -53,18 +54,20 @@ def run(ctx: ModuleContext) -> ModuleContext:
             series = s.get("series", [])
             if not series:
                 continue
-            ax.plot(series, marker=None, lw=1.4, label=s["name"], color=colors[si % len(colors)])
-            kmax = int(series.index(max(series))) if hasattr(series, "index") else 0
-            vmax = max(series) if series else 0
-            ax.annotate(f"{s['name']} {vmax:.0f}cm", (kmax, vmax),
-                        textcoords="offset points", xytext=(4, 5), fontsize=8, color=colors[si % len(colors)])
+            ax.plot(series, lw=1.5, label=s["name"], color=colors[si % len(colors)])
+            vmax = max(series)
+            kmax = int(series.index(vmax))
+            ax.annotate(f"{vmax:.0f}cm", (kmax, vmax),
+                        textcoords="offset points", xytext=(6, 5), fontsize=8,
+                        color=colors[si % len(colors)])
 
         # 阈值线
         for th, lab in THRESH_LINES:
             ax.axhline(th, ls="--", lw=0.8, alpha=0.6)
             ax.text(0.005, th, f"{lab} {th}cm", va="bottom", ha="left", fontsize=7, alpha=0.7, transform=ax.get_yaxis_transform())
 
-        ax.set_title(f"{region} 站点风暴潮增水过程曲线（模拟/真实数据）")
+        src_label = {"station": "站点观测数据", "grid": "网格数据", "none": ""}.get(src, "")
+        ax.set_title(f"{region} 站点风暴潮增水过程曲线（{src_label or '数据'}）")
         ax.set_xlabel("过程时次（降采样）")
         ax.set_ylabel("增水 (cm)")
         ax.legend(loc="upper left", fontsize=8)

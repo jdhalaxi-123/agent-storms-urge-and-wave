@@ -63,10 +63,12 @@ def run(ctx: ModuleContext) -> ModuleContext:
     for s in sites:
         cm = s.get("max_surge_cm", 0.0)
         lv = judge(cm)
+        pt = s.get("peak_time", "")
+        pd = s.get("peak_date", "")
         stations.append({
             "station": s.get("name", ""),
-            "date": "",
-            "time": "",
+            "date": pd,
+            "time": pt,
             "high_tide_cm": round(cm, 1),
             "warn": "700(蓝)/720(黄)/740(橙)/760(红)",
             "level": lv,
