@@ -107,4 +107,19 @@ def run(ctx: ModuleContext) -> ModuleContext:
         "peak_site": peak_site,
         "brief_data": brief_data,
     }
+
+    # 海浪评估（若已统计）
+    wave = ctx.results.get("wave_stats", {}) or {}
+    if wave.get("status") == "ok":
+        wl = wave.get("level", "无")
+        wtext = "未达到预警阈值" if wl == "无" else f"{wl}预警"
+        brief_data["summary"] += (
+            f"\n\n同时，受台风影响，厦门近岸海域将出现{wave.get('max_hs_m', 0):.1f}米的大浪过程，"
+            f"海浪预警级别为{wtext}。"
+        )
+        ctx.results["assess"]["wave"] = {
+            "max_hs_m": wave.get("max_hs_m"),
+            "level": wl,
+            "peak_time": wave.get("peak_time"),
+        }
     return ctx

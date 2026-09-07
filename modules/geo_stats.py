@@ -275,6 +275,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
     sites = _read_station_data(paths) if paths else []
     if sites:
         ctx.results["geo_stats"] = _finalize(sites, region, "station", paths[0] if paths else "")
+        _attach_wave(ctx)
         return ctx
 
     # ② 网格数据兜底
@@ -283,7 +284,92 @@ def run(ctx: ModuleContext) -> ModuleContext:
         sites = _read_grid_data(grid_path)
         if sites:
             ctx.results["geo_stats"] = _finalize(sites, region, "grid", grid_path)
+            _attach_wave(ctx)
             return ctx
 
     ctx.results["geo_stats"] = {"status": "no_data", "source": "none", "sites": [], "series": []}
+    _attach_wave(ctx)
     return ctx
+
+
+def _attach_wave(ctx: ModuleContext) -> None:
+    """附加海浪统计到 ctx.results["wave_stats"]。"""
+    try:
+        ctx.results["wave_stats"] = run_wave(ctx)
+    except Exception:
+        ctx.results["wave_stats"] = {"status": "no_data", "series": []}
+
+
+# --------------------------------------------------------------------------- #
+# 海浪统计（独立入口：wave_stats）
+# --------------------------------------------------------------------------- #
+WAVE_LEVELS = [("红色", 9.0), ("橙色", 6.0), ("黄色", 4.0), ("蓝色", 2.5)]
+
+# 重点关注海域（厦门附近）
+WAVE_BOX = (118.00, 118.40, 24.30, 24.60)
+
+
+def judge_wave(hs_m: float) -> str:
+    """按有效波高判级。"""
+    for name, th in WAVE_LEVELS:
+        if hs_m >= th:
+            return name
+    return "无"
+
+
+def run_wave(ctx: ModuleContext) -> Dict[str, Any]:
+    """海浪统计：扫描 M1/R1 海浪文件，采样目标海域最大波高。"""
+    import xarray as xr
+
+    paths = ctx.files.get("wave_files") or []
+    if not paths:
+        return {"status": "no_data", "series": []}
+
+    # 优先 M1（细网格,厦门附近），否则 R1
+    m1 = [p for p in paths if "M1" in os.path.basename(p)]
+    r1 = [p for p in paths if "R1" in os.path.basename(p)]
+    chosen = sorted(m1) or sorted(r1)
+    if not chosen:
+        return {"status": "no_data", "series": []}
+
+    results = []
+    for p in chosen:
+        try:
+            ds = xr.open_dataset(p, decode_times=False)
+        except Exception:
+            continue
+        try:
+            hs = ds["hs"].values
+            alon = ds["alon"].values if "alon" in ds.variables else ds["lon"].values
+            alat = ds["alat"].values if "alat" in ds.variables else ds["lat"].values
+            if np.asarray(alon).ndim == 1:
+                mask = ((alon >= WAVE_BOX[0]) & (alon <= WAVE_BOX[1]))[:, None] & \
+                       ((alat >= WAVE_BOX[2]) & (alat <= WAVE_BOX[3]))[None, :]
+                sel = hs[:, mask]
+            else:
+                mask = (alon >= WAVE_BOX[0]) & (alon <= WAVE_BOX[1]) & (alat >= WAVE_BOX[2]) & (alat <= WAVE_BOX[3])
+                sel = hs[:, mask]
+            daily = np.nanmax(sel, axis=1)
+            if len(daily) and not np.all(np.isnan(daily)):
+                results.append({
+                    "file": str(p),
+                    "max_hs_m": round(float(np.nanmax(daily)), 2),
+                    "peak_idx": int(np.nanargmax(daily)),
+                    "series_m": [round(float(v), 2) for v in daily[:: max(1, len(daily) // 30)]],
+                })
+        finally:
+            ds.close()
+
+    if not results:
+        return {"status": "no_data", "series": []}
+    best = max(results, key=lambda r: r["max_hs_m"])
+    level = judge_wave(best["max_hs_m"])
+    return {
+        "status": "ok",
+        "source": "M1" if m1 else "R1",
+        "file": best["file"],
+        "max_hs_m": best["max_hs_m"],
+        "level": level,
+        "peak_time": f"第{best['peak_idx']}时次",
+        "series": best["series_m"],
+    }
