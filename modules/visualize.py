@@ -108,35 +108,70 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
 
 def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str:
+    """站点风暴潮增水曲线（项目组风格）：扁长图幅、黑色单线、
+    站名+时间范围标题、英文日期X轴。一站点一张图"""
+    import datetime
+
     import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
 
     geo = ctx.results.get("geo_stats", {}) or {}
     region = geo.get("region") or ctx.request.get("region") or "目标海域"
-    src = geo.get("source", "")
-    src_label = {"station": "站点数据", "grid": "网格数据", "none": ""}.get(src, "")
     path = OUT_DIR / f"surge_series_{tag}.png"
-    fig, ax = plt.subplots(figsize=(6.9, 3.6), dpi=110)
-    colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e"]
+
+    # 一张图: 单站点(若多站, 取重点或分别画到一张? 项目组风格是一站一图)
+    # 简单起见: 画出 sites 里每个站折线(黑灰调), 主站黑色; 若单站 => 纯黑
+    import numpy as np
+
+    fig, ax = plt.subplots(figsize=(9.0, 2.6), dpi=110)  # 扁长
+    colors = ["black", "#666666", "#999999", "#aaaaaa", "#bbbbbb"]
     for si, s in enumerate(sites[:5]):
-        series = s.get("series", [])
-        if not series:
+        ser = s.get("series_full") or s.get("series_cm") or s.get("series") or []
+        if not ser:
             continue
-        ax.plot(series, lw=1.5, label=s["name"], color=colors[si % len(colors)])
-        vmax = max(series)
-        kmax = int(series.index(vmax))
-        ax.annotate(f"{vmax:.0f}cm", (kmax, vmax), textcoords="offset points",
-                    xytext=(6, 5), fontsize=8, color=colors[si % len(colors)])
+        # 构造真实时间轴(起始 start_dt, 每小时)
+        st_dt = s.get("start_dt")
+        if st_dt:
+            import numpy as np
+            x = [st_dt + datetime.timedelta(hours=k) for k in range(len(ser))]
+        else:
+            x = np.arange(len(ser))
+        ax.plot(x, ser, lw=0.9, color=colors[si % len(colors)], label=s["name"])
+        vmax = max(ser)
+        kmax = int(np.argmax(ser))
+        ax.annotate(f"{vmax:.0f}cm", (x[kmax], vmax), textcoords="offset points",
+                    xytext=(4, 4), fontsize=7, color=colors[si % len(colors)])
+
+    # 四色警戒虚线(蓝/黄/橙/红) —— 项目组水位图顶部风格
+    warn_colors = [("blue", "#1f77b4"), ("yellow", "#d62728"), ("orange", "#ff7f0e"), ("red", "#2ca02c")]
     for th, lab in THRESH_LINES:
-        ax.axhline(th, ls="--", lw=0.8, alpha=0.6)
-        ax.text(0.005, th, f"{lab} {th}cm", va="bottom", ha="left", fontsize=7,
-                alpha=0.7, transform=ax.get_yaxis_transform())
-    ax.set_title(f"{region} 站点风暴潮增水过程曲线（{src_label or '数据'}·{tag}）", fontsize=11)
-    ax.set_xlabel("过程时次（降采样）", fontsize=9)
-    ax.set_ylabel("增水 (cm)", fontsize=9)
+        th_c = {"蓝色": "#1f77b4", "黄色": "#d62728", "橙色": "#ff7f0e", "红色": "#d62728"}.get(lab, "#333")
+        ax.axhline(th, ls="--", lw=0.7, color=th_c, alpha=0.7)
+
+    # 标题: 站名(时间范围) —— 与项目组一致
+    s0 = sites[0] if sites else {}
+    sname = s0.get("name", region)
+    st = s0.get("start_dt") or datetime.datetime.now()
+    n = len(s0.get("series_full") or s0.get("series") or [])
+    en = st + datetime.timedelta(hours=n) if n else st
+    ax.set_title(f"{sname}({st.strftime('%Y%m%d')} 00:00-{en.strftime('%Y%m%d')} 23:00)", fontsize=10)
+    ax.set_xlabel("Date", fontsize=9)
+    ax.set_ylabel("Storm surge (cm)", fontsize=9)
     ax.tick_params(labelsize=8)
-    ax.legend(loc="upper left", fontsize=8, framealpha=0.9)
-    ax.grid(alpha=0.3)
-    fig.tight_layout(pad=1.2)
+    # 若时间轴是日期对象, 用英文月日格式(Nov.09) 与项目组一致
+    try:
+        x0 = sites[0].get("start_dt")
+        if x0:
+            import matplotlib.dates as mdates
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%b.%d"))
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+            fig.autofmt_xdate(rotation=0)
+    except Exception:
+        pass
+    if len(sites) > 1:
+        ax.legend(loc="upper left", fontsize=7, framealpha=0.8)
+    ax.grid(False)  # 项目组风格: 无网格
+    fig.tight_layout(pad=0.8)
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     return str(path)

@@ -36,6 +36,59 @@ SITES: Dict[str, tuple] = {
 # 单点数据站名缩写 -> 中文
 STATION_CN = {"XMN": "厦门", "CWU": "崇武", "JNJ": "晋江", "DSN": "东山东港"}
 
+
+def _parse_start_dt(path: str) -> Optional[datetime.datetime]:
+    """从文件名解析起始时间：如 ocn_forecast_20251110-20251116.nc -> 2025-11-10 00:00。"""
+    import re
+
+    m = re.search(r"(\d{8})[-_](\d{8})", os.path.basename(path))
+    if m:
+        try:
+            return datetime.datetime.strptime(m.group(1), "%Y%m%d")
+        except Exception:
+            return None
+    return None
+
+# 请求文本 -> 目标站点中文名 的别名映射
+# 用于"问哪个站就画哪个站"的过滤
+STATION_ALIASES = {
+    "厦门": ["厦门", "厦门港", "厦门站", "xm", "xmn"],
+    "崇武": ["崇武", "崇武站", "cwu"],
+    "晋江": ["晋江", "晋江站", "jnj"],
+    "东山东港": ["东山", "东山东港", "东山站", "东山东港站", "dsn"],
+}
+
+
+def _filter_sites(sites: List[Dict[str, Any]], request: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """按请求中的站点名过滤站点列表（问哪个站就保留哪个站）。
+
+    匹配依据：request 的 region 字段（如"厦门"、"厦门站"、"崇武"）。
+    - 若请求明确点名某站（厦门/崇武/晋江/东山任一），只保留匹配站；
+    - 若未点名（如"福建沿海"），保留全部。
+    """
+    text = str(request.get("region", "") or "").strip()
+    # 从请求文本里找命中的站点
+    hit_stations: List[str] = []
+    for station, aliases in STATION_ALIASES.items():
+        for a in aliases:
+            if a and a.lower() in text.lower():
+                hit_stations.append(station)
+                break
+    if not hit_stations:
+        return sites  # 未点名，全部保留
+    # 按站点中文名/别名过滤
+    out = []
+    for s in sites:
+        name = str(s.get("name", ""))
+        matched = False
+        for st in hit_stations:
+            if st in name or name in st:
+                matched = True
+                break
+        if matched:
+            out.append(s)
+    return out if out else sites  # 若过滤后为空(名字不匹配)，保底返回全部
+
 # 预警级别阈值（增水 cm）
 THRESHOLDS = {"蓝色": 30.0, "黄色": 50.0, "橙色": 80.0, "红色": 120.0}
 
@@ -129,6 +182,7 @@ def _read_station_data(paths: List[str]) -> List[Dict[str, Any]]:
                     "name": STATION_CN.get(code, code), "code": code,
                     "lon": lon, "lat": lat,
                     "series_cm": np.asarray(data).ravel().tolist(),
+                    "start_dt": _parse_start_dt(path),
                     "source_file": str(path),
                 })
             else:
@@ -140,6 +194,7 @@ def _read_station_data(paths: List[str]) -> List[Dict[str, Any]]:
                         "name": STATION_CN.get(code, code), "code": code,
                         "lon": lo, "lat": la,
                         "series_cm": np.asarray(data[:, i]).ravel().tolist(),
+                        "start_dt": _parse_start_dt(path),
                         "source_file": str(path),
                     })
             ds.close()
@@ -238,15 +293,18 @@ def _finalize(sites: List[Dict[str, Any]], region: str, source: str, source_file
                 s["max_surge_cm"] = round(float(np.nanmax(arr)), 1)
                 peak = int(np.nanargmax(arr))
                 s["peak_idx"] = peak
-                if base_dt:
-                    peak_dt = base_dt + datetime.timedelta(hours=peak)
+                # 峰值时间：优先 start_dt(文件名起始) + 时次
+                base_dt2 = s.get("start_dt") or base_dt
+                if base_dt2:
+                    peak_dt = base_dt2 + datetime.timedelta(hours=peak)
                     s["peak_time"] = peak_dt.strftime("%m-%d %H:%M")
                     s["peak_date"] = peak_dt.strftime("%Y-%m-%d")
                 else:
                     s["peak_time"] = f"第{peak}时次"
                 s["series"] = arr.tolist()
+                s["series_full"] = arr.tolist()  # 完整序列(画图用)
     top = max(sites, key=lambda s: s.get("max_surge_cm", -1e9))
-    # 站点序列(统一30点降采样)
+    # 站点序列(统一30点降采样; 完整序列保留在 series_full)
     for s in sites:
         arr = np.asarray(s.get("series_cm") or s.get("series") or [], dtype=float)
         if len(arr):
@@ -296,6 +354,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 arr = np.asarray(s.get("series_cm") or [], dtype=float)
                 if len(arr):
                     s["series_cm"] = arr[: hours].tolist()
+        # 按请求站点过滤（问厦门就只画厦门）
+        sites = _filter_sites(sites, ctx.request)
         ctx.results["geo_stats"] = _finalize(sites, region, "station", paths[0] if paths else "", hours)
         _attach_wave(ctx)
         return ctx
@@ -309,6 +369,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 for s in sites:
                     if s.get("series_cm"):
                         s["series_cm"] = s["series_cm"][: hours]
+            sites = _filter_sites(sites, ctx.request)
             ctx.results["geo_stats"] = _finalize(sites, region, "grid", grid_path, hours)
             _attach_wave(ctx)
             return ctx
