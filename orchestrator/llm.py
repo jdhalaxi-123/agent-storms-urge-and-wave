@@ -92,7 +92,10 @@ def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
-    """一轮对话。history 为 Gradio 传入的 [[user, assistant], ...]，返回 (文本, 图片列表)。"""
+    """一轮对话。history 为 Gradio 传入的 [[user, assistant], ...]，返回 (文本, 图片列表)。
+
+    每次 API 调用带 120s 超时，避免网络阻塞导致前端挂起。
+    """
     client = _get_client()
 
     if not message or not str(message).strip():
@@ -108,7 +111,7 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
     messages.append({"role": "user", "content": str(message)})
 
     # 第一次调用：LLM 决定直接回答还是调工具
-    resp = client.chat.completions.create(model=MODEL, messages=messages, tools=[FORECAST_TOOL])
+    resp = client.chat.completions.create(model=MODEL, messages=messages, tools=[FORECAST_TOOL], timeout=120)
     msg = resp.choices[0].message
 
     # 未调工具：直接返回文本
@@ -143,5 +146,5 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
             "content": json.dumps(result, ensure_ascii=False),
         })
 
-    resp2 = client.chat.completions.create(model=MODEL, messages=messages)
+    resp2 = client.chat.completions.create(model=MODEL, messages=messages, timeout=120)
     return resp2.choices[0].message.content or "（未生成回复，请重试）", images

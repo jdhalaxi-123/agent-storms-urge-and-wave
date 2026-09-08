@@ -18,6 +18,29 @@ from orchestrator.contract import ModuleContext
 # 增水判级阈值 (cm)
 LEVELS = [("红色", 120.0), ("橙色", 80.0), ("黄色", 50.0), ("蓝色", 30.0)]
 
+# 各站警戒潮位表（cm）：蓝/黄/橙/红
+# 来源：四色警戒潮位.et（陶老师提供），85黄零基准
+# 水尺零点基准 = 85黄零值 + "水尺零点与85黄零关系"差值
+#   换算证明：厦门 373+327=700 / 393+327=720 / 413+327=740 / 433+327=760 ✓
+#   即：水尺零点警戒(700/720/740/760) = 85黄零警戒(373/393/413/433) + 327
+STATION_WARN_LEVELS = {
+    "厦门": {"blue": 373, "yellow": 393, "orange": 413, "red": 433, "datum": 327,
+             "color": "373/393/413/433", "wm_color": "700/720/740/760"},
+    "崇武": {"blue": 361, "yellow": 381, "orange": 401, "red": 431, "datum": 449,
+             "color": "361/381/401/431", "wm_color": "810/830/850/880"},
+    "晋江": {"blue": 345, "yellow": 365, "orange": 395, "red": 425, "datum": 487,
+             "color": "345/365/395/425", "wm_color": "832/852/882/912"},
+    "东山": {"blue": 255, "yellow": 265, "orange": 285, "red": 305, "datum": 495,
+             "color": "255/265/285/305", "wm_color": "750/760/780/800"},
+}
+# 厦门站名带"厦门港"等别名
+STATION_NAME_MAP = {
+    "厦门": "厦门", "厦门港": "厦门", "厦门(XMN)": "厦门",
+    "东山东港": "东山", "东山东港(DSN)": "东山",
+    "崇武": "崇武", "崇武(CWU)": "崇武",
+    "晋江": "晋江", "晋江(JNJ)": "晋江",
+}
+
 
 def judge(max_surge_cm: float) -> str:
     """按最大增水判级。"""
@@ -31,6 +54,24 @@ def _warn_level_text(level: str) -> str:
     if level == "无":
         return "未达到预警阈值"
     return f"{level}预警"
+
+
+def judge_by_warn_level(total_level_cm: float, warn: dict) -> str:
+    """总潮位判级：水尺/85黄零总水位对照警戒潮位表。
+
+    total_level_cm 与 warn 同基准即可（统一转换后调用）。
+    """
+    if not warn:
+        return judge(total_level_cm)
+    if total_level_cm >= warn["red"]:
+        return "红色"
+    if total_level_cm >= warn["orange"]:
+        return "橙色"
+    if total_level_cm >= warn["yellow"]:
+        return "黄色"
+    if total_level_cm >= warn["blue"]:
+        return "蓝色"
+    return "无"
 
 
 def run(ctx: ModuleContext) -> ModuleContext:
@@ -58,23 +99,31 @@ def run(ctx: ModuleContext) -> ModuleContext:
     else:
         basis = f"过程最大增水 {max_cm:.1f}cm(位于{peak_site})，达到{level}预警阈值"
 
-    # 站点表（简报的潮位×警戒潮位对照表）
+    # 站点表（简报的潮位×警戒潮位对照表，用各站真实警戒潮位）
     stations = []
     for s in sites:
         cm = s.get("max_surge_cm", 0.0)
         lv = judge(cm)
         pt = s.get("peak_time", "")
         pd = s.get("peak_date", "")
+        sname = s.get("name", "")
+        # 匹配各站警戒潮位
+        key = STATION_NAME_MAP.get(sname, sname)
+        warn = STATION_WARN_LEVELS.get(key) or STATION_WARN_LEVELS.get(sname)
+        warn_text = warn["color"] + "(蓝/黄/橙/红)" if warn else "700(蓝)/720(黄)/740(橙)/760(红)"
         stations.append({
-            "station": s.get("name", ""),
+            "station": sname,
             "date": pd,
             "time": pt,
             "high_tide_cm": round(cm, 1),
-            "warn": "700(蓝)/720(黄)/740(橙)/760(红)",
+            "warn": warn_text,
             "level": lv,
+            "warn_blue": warn["blue"] if warn else None,
         })
 
     region = ctx.request.get("region", "未指定海域")
+    tw = ctx.request.get("time_window", "")
+    tw_text = f"（{tw}窗口）" if tw and tw != "未指定" else ""
     brief_data = {
         "template_type": "storm_surge_alert",
         "agency": "自然资源部厦门海洋预报台",
@@ -84,12 +133,17 @@ def run(ctx: ModuleContext) -> ModuleContext:
         "signer": "",
         "basis": "《自然资源部厦门海洋中心海洋灾害应急执行预案（风暴潮、海浪、海啸）》",
         "summary": (
-            f"受台风过程影响，{region}将出现{max_cm:.0f}厘米左右的风暴增水过程，"
+            f"受台风过程影响，{region}将出现{max_cm:.0f}厘米左右的风暴增水过程{tw_text}，"
             f"过程最大增水出现在{peak_site}（{peak_time}），预警级别为{_warn_level_text(level)}。"
         ),
         "stations": stations,
         "notice": "请沿海各有关单位密切关注我台后续风暴潮预警报。",
         "tip": "预警提示：请沿海相关部门关闭危险区域的海滨浴场和休闲娱乐场所，加固薄弱危险区域的海堤等设施，做好防潮准备和应急措施。",
+        "note": (
+            "注：本简报预警级别按「风暴增水分级」判定（蓝色30cm/黄色50cm/橙色80cm/红色120cm）；"
+            "表中警戒潮位为该站85黄零基准的四色警戒值（供参考），"
+            "总水位（增水+天文潮）对照警戒潮位的最终判级以厦门中心业务化运行结果为准。"
+        ),
         "targets": "市委办、市政府办、市防汛办",
         "contact": "陶小琴",
         "phone": "0592－2065005，18705925573",

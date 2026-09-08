@@ -218,8 +218,8 @@ def _sample_at(ds, var: str, lon_pt: float, lat_pt: float) -> np.ndarray:
     return ds[var].isel(lat=j, lon=i).values
 
 
-def _finalize(sites: List[Dict[str, Any]], region: str, source: str, source_file: str) -> Dict[str, Any]:
-    """汇总统计。"""
+def _finalize(sites: List[Dict[str, Any]], region: str, source: str, source_file: str, hours: Optional[int] = None) -> Dict[str, Any]:
+    """汇总统计。hours: 时间窗小时数(截取后)。"""
     if not sites:
         return {"status": "no_data", "source": "none", "sites": [], "series": []}
     # 从文件名推断起始日期（如 ocn_forecast_20251110-20251116.nc -> 2025-11-10 00:00）
@@ -256,6 +256,7 @@ def _finalize(sites: List[Dict[str, Any]], region: str, source: str, source_file
         "source": source,
         "source_file": source_file,
         "region": region,
+        "time_window_hours": hours,
         "sites": sites,
         "max_surge_cm": top.get("max_surge_cm", 0.0),
         "peak_time": top.get("peak_time", ""),
@@ -266,15 +267,36 @@ def _finalize(sites: List[Dict[str, Any]], region: str, source: str, source_file
     }
 
 
+def _parse_window_hours(tw: str) -> Optional[int]:
+    """从 time_window 字符串解析小时数，如 '未来5天'/'3天'/'72小时'->72。"""
+    if not tw:
+        return None
+    import re
+    m = re.search(r"(\d+)\s*(天|日|d|h|小时)", str(tw))
+    if not m:
+        return None
+    n = int(m.group(1))
+    unit = m.group(2)
+    if unit in ("天", "日", "d"):
+        return n * 24
+    return n  # 小时
+
+
 def run(ctx: ModuleContext) -> ModuleContext:
     region = ctx.request.get("region", "未知海域")
     typhoon = ctx.results.get("meta", {}).get("typhoon", "") or ""
+    hours = _parse_window_hours(ctx.request.get("time_window", ""))
 
     # ① 单点数据优先（只取当前台风的主文件）
     paths = _pick_station_files(ctx.files.get("station_files") or [], typhoon)
     sites = _read_station_data(paths) if paths else []
     if sites:
-        ctx.results["geo_stats"] = _finalize(sites, region, "station", paths[0] if paths else "")
+        if hours:
+            for s in sites:
+                arr = np.asarray(s.get("series_cm") or [], dtype=float)
+                if len(arr):
+                    s["series_cm"] = arr[: hours].tolist()
+        ctx.results["geo_stats"] = _finalize(sites, region, "station", paths[0] if paths else "", hours)
         _attach_wave(ctx)
         return ctx
 
@@ -283,7 +305,11 @@ def run(ctx: ModuleContext) -> ModuleContext:
     if grid_path:
         sites = _read_grid_data(grid_path)
         if sites:
-            ctx.results["geo_stats"] = _finalize(sites, region, "grid", grid_path)
+            if hours:
+                for s in sites:
+                    if s.get("series_cm"):
+                        s["series_cm"] = s["series_cm"][: hours]
+            ctx.results["geo_stats"] = _finalize(sites, region, "grid", grid_path, hours)
             _attach_wave(ctx)
             return ctx
 
@@ -293,9 +319,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
 
 def _attach_wave(ctx: ModuleContext) -> None:
-    """附加海浪统计到 ctx.results["wave_stats"]。"""
+    """附加海浪统计到 ctx.results["wave_stats"]（带时间窗截取）。"""
     try:
-        ctx.results["wave_stats"] = run_wave(ctx)
+        hours = _parse_window_hours(ctx.request.get("time_window", ""))
+        ctx.results["wave_stats"] = run_wave(ctx, hours)
     except Exception:
         ctx.results["wave_stats"] = {"status": "no_data", "series": []}
 
@@ -317,8 +344,8 @@ def judge_wave(hs_m: float) -> str:
     return "无"
 
 
-def run_wave(ctx: ModuleContext) -> Dict[str, Any]:
-    """海浪统计：扫描 M1/R1 海浪文件，采样目标海域最大波高。"""
+def run_wave(ctx: ModuleContext, hours: Optional[int] = None) -> Dict[str, Any]:
+    """海浪统计：扫描 M1/R1 海浪文件，采样目标海域最大波高（可按时间窗截取）。"""
     import xarray as xr
 
     paths = ctx.files.get("wave_files") or []
@@ -332,7 +359,12 @@ def run_wave(ctx: ModuleContext) -> Dict[str, Any]:
     if not chosen:
         return {"status": "no_data", "series": []}
 
-    results = []
+    # 按时间窗取需要的日文件数(每天24h)
+    need_files = max(1, -(-(hours or 24) // 24)) if hours else len(chosen)
+    chosen = chosen[:need_files]
+
+    # 拼接各文件逐时最大序列
+    full_series: List[float] = []
     for p in chosen:
         try:
             ds = xr.open_dataset(p, decode_times=False)
@@ -350,19 +382,25 @@ def run_wave(ctx: ModuleContext) -> Dict[str, Any]:
                 mask = (alon >= WAVE_BOX[0]) & (alon <= WAVE_BOX[1]) & (alat >= WAVE_BOX[2]) & (alat <= WAVE_BOX[3])
                 sel = hs[:, mask]
             daily = np.nanmax(sel, axis=1)
-            if len(daily) and not np.all(np.isnan(daily)):
-                results.append({
-                    "file": str(p),
-                    "max_hs_m": round(float(np.nanmax(daily)), 2),
-                    "peak_idx": int(np.nanargmax(daily)),
-                    "series_m": [round(float(v), 2) for v in daily[:: max(1, len(daily) // 30)]],
-                })
+            valid = daily[~np.isnan(daily)]
+            if len(valid):
+                full_series.extend(float(v) for v in valid)
         finally:
             ds.close()
 
-    if not results:
+    if hours:
+        full_series = full_series[: hours]
+    if not full_series:
         return {"status": "no_data", "series": []}
-    best = max(results, key=lambda r: r["max_hs_m"])
+
+    arr = np.asarray(full_series, dtype=float)
+    best = {
+        "file": str(chosen[0]) if chosen else "",
+        "max_hs_m": round(float(np.nanmax(arr)), 2),
+        "peak_idx": int(np.nanargmax(arr)),
+        "series_m": [round(float(v), 2) for v in arr[:: max(1, len(arr) // 30)]],
+        "hours": hours,
+    }
     level = judge_wave(best["max_hs_m"])
     return {
         "status": "ok",
@@ -372,4 +410,5 @@ def run_wave(ctx: ModuleContext) -> Dict[str, Any]:
         "level": level,
         "peak_time": f"第{best['peak_idx']}时次",
         "series": best["series_m"],
+        "time_window_hours": hours,
     }

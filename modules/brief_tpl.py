@@ -130,6 +130,10 @@ def render_markdown(data: Dict[str, Any]) -> str:
     tip = _t(data, "tip")
     if tip:
         lines.append(tip)
+    note = _t(data, "note")
+    if note:
+        lines.append("")
+        lines.append(note)
     lines.append("")
 
     lines += _footer_lines(data)
@@ -228,7 +232,7 @@ def render_docx(data: Dict[str, Any], output_dir: Path) -> Path:
     elif tpl_type == "marine_env_forecast":
         _docx_wave_table(doc, data)
 
-    for para in (_t(data, "notice"), _t(data, "tip")):
+    for para in (_t(data, "notice"), _t(data, "tip"), _t(data, "note")):
         if para:
             doc.add_paragraph(para)
 
