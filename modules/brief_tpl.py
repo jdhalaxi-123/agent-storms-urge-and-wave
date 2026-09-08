@@ -127,6 +127,10 @@ def render_markdown(data: Dict[str, Any]) -> str:
     notice = _t(data, "notice")
     if notice:
         lines.append(notice)
+    data_range = _t(data, "data_range")
+    if data_range:
+        lines.append("")
+        lines.append(data_range)
     tip = _t(data, "tip")
     if tip:
         lines.append(tip)

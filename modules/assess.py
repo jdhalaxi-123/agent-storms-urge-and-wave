@@ -56,6 +56,17 @@ def _warn_level_text(level: str) -> str:
     return f"{level}预警"
 
 
+def _data_range_text(ctx: ModuleContext, geo: dict) -> str:
+    """数据覆盖的真实日期范围描述（如 '2025-11-10 00:00 ~ 2025-11-16 23:00'）。"""
+    s = geo.get("data_start", "")
+    e = geo.get("data_end", "")
+    if s and e:
+        return f"数据范围：{s} ~ {e}"
+    if s:
+        return f"数据起始：{s}"
+    return ""
+
+
 def judge_by_warn_level(total_level_cm: float, warn: dict) -> str:
     """总潮位判级：水尺/85黄零总水位对照警戒潮位表。
 
@@ -123,7 +134,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
     region = ctx.request.get("region", "未指定海域")
     tw = ctx.request.get("time_window", "")
-    tw_text = f"（{tw}窗口）" if tw and tw != "未指定" else ""
+    tw_text = ""  # 不再写"未来N天窗口"(避免误导); 实际范围由 data_range 标注
     brief_data = {
         "template_type": "storm_surge_alert",
         "agency": "自然资源部厦门海洋预报台",
@@ -136,6 +147,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
             f"受台风过程影响，{region}将出现{max_cm:.0f}厘米左右的风暴增水过程{tw_text}，"
             f"过程最大增水出现在{peak_site}（{peak_time}），预警级别为{_warn_level_text(level)}。"
         ),
+        "data_range": _data_range_text(ctx, geo),
         "stations": stations,
         "notice": "请沿海各有关单位密切关注我台后续风暴潮预警报。",
         "tip": "预警提示：请沿海相关部门关闭危险区域的海滨浴场和休闲娱乐场所，加固薄弱危险区域的海堤等设施，做好防潮准备和应急措施。",

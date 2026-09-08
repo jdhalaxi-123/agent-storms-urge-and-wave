@@ -309,12 +309,27 @@ def _finalize(sites: List[Dict[str, Any]], region: str, source: str, source_file
         arr = np.asarray(s.get("series_cm") or s.get("series") or [], dtype=float)
         if len(arr):
             s["series"] = arr[:: max(1, len(arr) // 30)].round(1).tolist()
+
+    # 数据真实起止时间（用于简报标注；来自文件名起始 + 序列长度）
+    data_start = data_end = ""
+    if sites:
+        s0 = sites[0]
+        st = s0.get("start_dt") or base_dt
+        full = s0.get("series_full") or s0.get("series_cm") or []
+        if st:
+            data_start = st.strftime("%Y-%m-%d %H:%M")
+            if full:
+                data_end = (st + datetime.timedelta(hours=len(full) - 1)).strftime("%Y-%m-%d %H:%M")
+            else:
+                data_end = st.strftime("%Y-%m-%d %H:%M")
     return {
         "status": "ok",
         "source": source,
         "source_file": source_file,
         "region": region,
         "time_window_hours": hours,
+        "data_start": data_start,
+        "data_end": data_end,
         "sites": sites,
         "max_surge_cm": top.get("max_surge_cm", 0.0),
         "peak_time": top.get("peak_time", ""),
@@ -349,11 +364,6 @@ def run(ctx: ModuleContext) -> ModuleContext:
     paths = _pick_station_files(ctx.files.get("station_files") or [], typhoon)
     sites = _read_station_data(paths) if paths else []
     if sites:
-        if hours:
-            for s in sites:
-                arr = np.asarray(s.get("series_cm") or [], dtype=float)
-                if len(arr):
-                    s["series_cm"] = arr[: hours].tolist()
         # 按请求站点过滤（问厦门就只画厦门）
         sites = _filter_sites(sites, ctx.request)
         ctx.results["geo_stats"] = _finalize(sites, region, "station", paths[0] if paths else "", hours)
@@ -365,10 +375,6 @@ def run(ctx: ModuleContext) -> ModuleContext:
     if grid_path:
         sites = _read_grid_data(grid_path)
         if sites:
-            if hours:
-                for s in sites:
-                    if s.get("series_cm"):
-                        s["series_cm"] = s["series_cm"][: hours]
             sites = _filter_sites(sites, ctx.request)
             ctx.results["geo_stats"] = _finalize(sites, region, "grid", grid_path, hours)
             _attach_wave(ctx)
