@@ -49,6 +49,61 @@ def _parse_start_dt(path: str) -> Optional[datetime.datetime]:
             return None
     return None
 
+
+def _parse_target_date(date_str: str) -> Optional[datetime.date]:
+    """解析目标日期：'7月22日' / '2024-07-22' / '07-22' / '2024年7月22日' -> date。"""
+    import re
+
+    s = str(date_str or "").strip()
+    if not s or s in ("未指定", "无", "全部", "全程"):
+        return None
+    # 2024-07-22 / 2024/07/22 / 2024年7月22日
+    m = re.search(r"(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})", s)
+    if m:
+        try:
+            return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except Exception:
+            return None
+    # 月日（无年份：07-22 / 7月22日）
+    m2 = re.search(r"(\d{1,2})\s*[-/月]\s*(\d{1,2})\s*日?", s)
+    if m2:
+        # 年份未知，用数据起止年份推断（用2000年占位，由调用方补充）
+        return datetime.date(2000, int(m2.group(1)), int(m2.group(2)))
+    return None
+
+
+def _slice_by_date(sites: List[Dict[str, Any]], target_date: datetime.date) -> List[Dict[str, Any]]:
+    """按目标日期截取站点序列（保留该日期所在时次）。
+
+    用各站点 start_dt 推算时次与目标日期的对应关系；
+    目标日期在序列范围内则截取，否则保留原序列（日期可能超出数据范围）。
+    """
+    for s in sites:
+        st = s.get("start_dt")
+        full = s.get("series_full") or s.get("series_cm") or []
+        if not st or not full:
+            continue
+        # 若 target_date 年份为2000(月日占位), 用 st.year 补全
+        if target_date.year == 2000:
+            try:
+                target_date = target_date.replace(year=st.year)
+            except Exception:
+                pass
+        # 计算目标日期对应的时次索引 [start,end)
+        day_start = datetime.datetime.combine(target_date, datetime.time(0, 0))
+        day_end = day_start + datetime.timedelta(days=1)
+        idx0 = int((day_start - st).total_seconds() // 3600)
+        idx1 = int((day_end - st).total_seconds() // 3600)
+        if idx0 < 0:
+            idx0 = 0
+        if idx1 > len(full):
+            idx1 = len(full)
+        if idx0 < idx1:
+            s["series_cm"] = full[idx0:idx1]
+        # 更新 start_dt 为该日 00:00（画图时间轴/数据范围跟随）
+        s["start_dt"] = day_start.replace(tzinfo=None)
+    return sites
+
 # 请求文本 -> 目标站点中文名 的别名映射
 # 用于"问哪个站就画哪个站"的过滤
 STATION_ALIASES = {
@@ -428,6 +483,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
     region = ctx.request.get("region", "未知海域")
     typhoon = ctx.results.get("meta", {}).get("typhoon", "") or ""
     hours = _parse_window_hours(ctx.request.get("time_window", ""))
+    target_date = _parse_target_date(ctx.request.get("date", ""))
 
     # ⭐ Ensemble 集合数据优先（2403/1521/1614：自带总水位/天文潮/增水）
     ens_path = ctx.files.get("nc_forecast_num", "")
@@ -435,6 +491,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
         sites = _read_ensemble_sites(ens_path)
         if sites:
             sites = _filter_sites(sites, ctx.request)
+            if target_date:
+                sites = _slice_by_date(sites, target_date)
             ctx.results["geo_stats"] = _finalize(sites, region, "ensemble", ens_path, hours)
             _attach_wave(ctx)
             return ctx
@@ -445,6 +503,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
     if sites:
         # 按请求站点过滤（问厦门就只画厦门）
         sites = _filter_sites(sites, ctx.request)
+        if target_date:
+            sites = _slice_by_date(sites, target_date)
         ctx.results["geo_stats"] = _finalize(sites, region, "station", paths[0] if paths else "", hours)
         _attach_wave(ctx)
         return ctx
