@@ -61,17 +61,21 @@ def run(ctx: ModuleContext) -> ModuleContext:
     if ai_path:
         stats["智能预报"] = _sample_max(ai_path, *SITES["厦门港"])
 
-    if not stats or not any(stats.values()):
-        ctx.meta["selected_source"] = "智能预报"
+    # 过滤掉读取失败(None)的方案
+    valid = {k: v for k, v in stats.items() if v}
+    if len(valid) <= 1:
+        # 单方案或无双方案：直接采用，不选优
+        chosen = next(iter(valid), "智能预报") if valid else "智能预报"
+        ctx.meta["selected_source"] = chosen
         ctx.results["selector"] = {
-            "status": "stub",
-            "chosen": "智能预报",
-            "reason": "占位：未找到两套数据",
+            "status": "single" if valid else "stub",
+            "chosen": chosen,
+            "reason": "仅一套数据（Ensemble 集合/单方案），无需选优" if valid else "占位：未找到数据",
         }
         return ctx
 
     # 规则选优：取两方案中最大增水更高者（更保守/更危险侧，避免漏报）
-    chosen = max(stats, key=lambda k: stats[k]["max_cm"])
+    chosen = max(valid, key=lambda k: valid[k]["max_cm"])
 
     ctx.meta["selected_source"] = chosen
     ctx.results["selector"] = {
@@ -80,7 +84,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         "reason": "取两方案中最大增水更保守者，避免漏报（规则兜底，待评估指标）",
         "sources": {
             k: {"max_cm": v["max_cm"], "mean_cm": v["mean_cm"]}
-            for k, v in stats.items() if v
+            for k, v in valid.items()
         },
     }
     return ctx

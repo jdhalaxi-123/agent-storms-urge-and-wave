@@ -39,6 +39,7 @@ FORECAST_TOOL = {
                 },
                 "time_window": {"type": "string", "description": "时间窗，如：未来5天"},
                 "risk_type": {"type": "string", "description": "风险类型，如：海水倒灌、增水、浪高"},
+                "typhoon": {"type": "string", "description": "台风编号（可省略），如：2526、2403、1521、1614；用户未指定台风时省略"},
             },
             "required": ["region", "disaster"],
         },
@@ -80,6 +81,7 @@ def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
         "risk_type": args.get("risk_type", "general"),
         "region": args.get("region", "未知海域"),
         "time_window": args.get("time_window", "未指定"),
+        "typhoon": args.get("typhoon", ""),
         "raw": "llm",
     }
     result = engine.run_with_slots(slots, raw=json.dumps(args, ensure_ascii=False))

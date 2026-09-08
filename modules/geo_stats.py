@@ -207,6 +207,75 @@ def _read_station_data(paths: List[str]) -> List[Dict[str, Any]]:
     return results
 
 
+def _read_ensemble_sites(path: str) -> List[Dict[str, Any]]:
+    """从 Ensemble 集合文件（非结构网格: lon/lat 节点 70775, tri 三角形）按最近节点采样站点。
+
+    变量：elev_all(总水位) / elev_surge(增水) / elev_tide(天文潮)，单位 m；
+    站点输出三量序列（cm）：series_all / series_surge / series_tide。
+    """
+    import xarray as xr
+
+    try:
+        ds = xr.open_dataset(path, decode_times=True)
+    except Exception:
+        return []
+
+    try:
+        # 变量名兼容（ensemble_elev_* / elev_*）
+        all_var = "elev_all" if "elev_all" in ds.variables else ("ensemble_elev_all" if "ensemble_elev_all" in ds.variables else None)
+        surge_var = "elev_surge" if "elev_surge" in ds.variables else ("ensemble_elev_surge" if "ensemble_elev_surge" in ds.variables else None)
+        tide_var = "elev_tide" if "elev_tide" in ds.variables else ("ensemble_elev_tide" if "ensemble_elev_tide" in ds.variables else None)
+        if all_var is None:
+            return []
+        lon = np.asarray(ds["lon"].values).ravel()
+        lat = np.asarray(ds["lat"].values).ravel()
+        time = ds["time"].values
+        start_dt = pd_to_dt(time[0]) if len(time) else None
+
+        sites = []
+        for name, (lon_pt, lat_pt) in SITES.items():
+            d2 = (lon - lon_pt) ** 2 + (lat - lat_pt) ** 2
+            idx = int(np.argmin(d2))
+            row = {
+                "name": name, "code": name.split("(")[-1].rstrip(")"),
+                "lon": float(lon[idx]), "lat": float(lat[idx]),
+                "start_dt": start_dt,
+                "source_file": str(path),
+            }
+            for key, var in [("series_all", all_var), ("series_surge", surge_var), ("series_tide", tide_var)]:
+                if var is None:
+                    continue
+                arr = np.asarray(ds[var].values)
+                # 非结构网格: (point, time) 或 (cell, time)
+                if arr.shape[0] == lon.size:
+                    s = arr[idx, :]
+                else:
+                    s = arr[-1, :]  # 兜底取末维
+                row[key] = (np.asarray(s) * 100.0).round(2).tolist()  # m -> cm
+            # 站点主序列: 有 all 用 all(总水位), 否则 surge
+            row["series_cm"] = row.get("series_all") or row.get("series_surge")
+            sites.append(row)
+        ds.close()
+        return sites
+    except Exception:
+        try:
+            ds.close()
+        except Exception:
+            pass
+        return []
+
+
+def pd_to_dt(v):
+    """numpy.datetime64 -> datetime.datetime"""
+    import datetime as _dt
+    try:
+        if hasattr(v, "astype"):
+            v = v.astype("datetime64[s]").item()
+        return v if isinstance(v, _dt.datetime) else None
+    except Exception:
+        return None
+
+
 def _merge_stations(stations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """合并同名站点（多文件/多时次取数据最长者）。"""
     merged: Dict[str, Dict[str, Any]] = {}
@@ -359,6 +428,16 @@ def run(ctx: ModuleContext) -> ModuleContext:
     region = ctx.request.get("region", "未知海域")
     typhoon = ctx.results.get("meta", {}).get("typhoon", "") or ""
     hours = _parse_window_hours(ctx.request.get("time_window", ""))
+
+    # ⭐ Ensemble 集合数据优先（2403/1521/1614：自带总水位/天文潮/增水）
+    ens_path = ctx.files.get("nc_forecast_num", "")
+    if ens_path and "Ensemble" in ens_path.replace("\\", "/"):
+        sites = _read_ensemble_sites(ens_path)
+        if sites:
+            sites = _filter_sites(sites, ctx.request)
+            ctx.results["geo_stats"] = _finalize(sites, region, "ensemble", ens_path, hours)
+            _attach_wave(ctx)
+            return ctx
 
     # ① 单点数据优先（只取当前台风的主文件）
     paths = _pick_station_files(ctx.files.get("station_files") or [], typhoon)

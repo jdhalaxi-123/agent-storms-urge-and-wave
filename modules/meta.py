@@ -57,6 +57,7 @@ def _classify(name: str) -> str:
 def run(ctx: ModuleContext) -> ModuleContext:
     region = ctx.request.get("region", "未知海域")
     tw = ctx.request.get("time_window", "未指定")
+    req_ty = str(ctx.request.get("typhoon", "") or "").strip()
 
     root = data_root()
     found = scan(root)
@@ -68,40 +69,69 @@ def run(ctx: ModuleContext) -> ModuleContext:
         ctx.results["meta"] = {"status": "placeholder", "root": str(root), "matched": []}
         return ctx
 
+    # 台风号归一化（请求里可能是 "2403" / "2526"）
+    import re as _re
+    m_ty = _re.search(r"(\d{3,4})", req_ty)
+    req_id = m_ty.group(1) if m_ty else ""
+
     by_kind: Dict[str, List[Dict[str, Any]]] = {"station": [], "surge": [], "wave": [], "wind": [], "other": []}
     for f in found:
         by_kind[_classify(f["name"])].append(f)
 
-    # 登记关键路径
-    ctx.files["station_files"] = [f["path"] for f in by_kind["station"]]
-    ctx.files["surge_files"] = [f["path"] for f in by_kind["surge"]]
-    ctx.files["wave_files"] = [f["path"] for f in by_kind["wave"]]
-    ctx.files["wind_files"] = [f["path"] for f in by_kind["wind"]]
+    # 目标台风数据筛选（默认 2526）
+    target = req_id or "2526"
+    ctx.files["surge_files"] = [f["path"] for f in by_kind["surge"]
+                                if target in f["rel"].replace("\\", "/")]
+    ctx.files["wave_files"] = [f["path"] for f in by_kind["wave"]
+                               if target in f["rel"].replace("\\", "/")]
+    ctx.files["wind_files"] = [f["path"] for f in by_kind["wind"]
+                               if target in f["rel"].replace("\\", "/")]
+    ctx.files["station_files"] = [f["path"] for f in by_kind["station"]
+                                  if target in f["rel"].replace("\\", "/") or target in f["name"]]
 
+    # Ensemble 台风集合（2403/1521/1614）：从 Ensemble 目录按台风挑
+    ens_files = [f for f in found if "Ensemble" in f["rel"].replace("\\", "/") and target in f["name"]]
+    if ens_files:
+        ctx.files["ensemble_files"] = [f["path"] for f in ens_files]
+        # 主文件：优先 *_irregular_new.nc(float32省内存)，其次 ensemble_*
+        best = None
+        for f in ens_files:
+            n = f["name"]
+            if "_irregular_new" in n:
+                best = f
+                break
+        if best is None:
+            for f in ens_files:
+                if "_irregular" in f["name"]:
+                    best = f
+                    break
+        if best:
+            ctx.files["nc_forecast_num"] = best["path"]
+            if "wave" in best["rel"].replace("\\", "/") or "Wave" in best["rel"]:
+                pass
+        # 海浪集合
+        wf = next((f for f in ens_files if "_wave" in f["name"].lower() or "wave" in f["rel"].replace("\\", "/").lower()), None)
+        if wf:
+            ctx.files["wave_files"] = [wf["path"]]
+
+    # 非 Ensemble 场预报（2526 的 output_0/4）
     for f in by_kind["surge"]:
         if f["name"] == "output_0.nc":
-            ctx.files["nc_forecast_num"] = f["path"]
+            ctx.files["nc_forecast_num"] = ctx.files.get("nc_forecast_num") or f["path"]
         elif f["name"] == "output_4.nc":
             ctx.files["nc_forecast_num_alt"] = f["path"]
 
-    # 台风编号推断：优先 typhoon_2526（当前更新台风），否则按最常见的编号
-    import collections
-    ty_ids = re.findall(r"typhoon_(\d+)", " ".join(f["rel"] for f in found))
-    if "2526" in ty_ids:
-        ty_num = "typhoon_2526"
-    elif ty_ids:
-        ty_num = f"typhoon_{collections.Counter(ty_ids).most_common(1)[0][0]}"
-    else:
-        ty_num = "unknown"
-
+    ty_num = f"typhoon_{target}"
     ctx.results["meta"] = {
         "status": "found",
         "root": str(root),
         "typhoon": ty_num,
+        "request_typhoon": req_id or "",
         "total": len(found),
         "classified": {k: len(v) for k, v in by_kind.items() if v},
-        "station_files": [os.path.basename(f["path"]) for f in by_kind["station"]][:20],
-        "surge_files": [os.path.basename(f["path"]) for f in by_kind["surge"]][:10],
-        "wave_files": [os.path.basename(f["path"]) for f in by_kind["wave"]][:10],
+        "station_files": [os.path.basename(p) if isinstance(p, str) else os.path.basename(p["path"]) for p in ctx.files.get("station_files", [])][:20],
+        "surge_files": [os.path.basename(p) if isinstance(p, str) else os.path.basename(p["path"]) for p in ctx.files.get("surge_files", [])][:10],
+        "wave_files": [os.path.basename(p) if isinstance(p, str) else os.path.basename(p["path"]) for p in ctx.files.get("wave_files", [])][:10],
+        "ensemble_files": [os.path.basename(p) if isinstance(p, str) else os.path.basename(p["path"]) for p in ens_files][:10],
     }
     return ctx
