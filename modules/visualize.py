@@ -31,15 +31,24 @@ def _setup_cn_font() -> None:
 
 
 def _tag(ctx: ModuleContext) -> str:
-    """图标签：时间窗，如 3天/5天。"""
-    tw = ctx.request.get("time_window", "") or ""
-    if "3" in tw and "天" in tw:
-        return "3天"
-    if "5" in tw and "天" in tw:
-        return "5天"
-    if "7" in tw and "天" in tw:
-        return "7天"
-    return "全部"
+    """图标签：台风号 + 时间窗 + 日期，确保文件名唯一（不被不同查询覆盖）。"""
+    typhoon = str(ctx.request.get("typhoon", "") or "").replace(" ", "")
+    d = str(ctx.request.get("date", "") or "").strip()
+    tw = str(ctx.request.get("time_window", "") or "")
+    parts = []
+    if typhoon:
+        parts.append(typhoon[:6])
+    if d and d not in ("未指定", "无", "全部", "全程"):
+        parts.append(d[:10].replace("/", "").replace("-", "").replace("年", "").replace("月", "").replace("日", ""))
+    elif "3" in tw and "天" in tw:
+        parts.append("3天")
+    elif "5" in tw and "天" in tw:
+        parts.append("5天")
+    elif "7" in tw and "天" in tw:
+        parts.append("7天")
+    else:
+        parts.append("全部")
+    return "_".join(parts) if parts else "全部"
 
 
 def run(ctx: ModuleContext) -> ModuleContext:
@@ -216,8 +225,8 @@ def _draw_field_map(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
         except Exception:
             return None, None, None
 
-    for path, label, fname in [(num_p, "数值模拟", "field_map_num"),
-                               (ai_p, "AI/融合", "field_map_ai")]:
+    for path, label, fname in [(num_p, "数值模拟", f"field_map_num_{tag}"),
+                               (ai_p, "AI/融合", f"field_map_ai_{tag}")]:
         if not path:
             continue
         m, lon2, lat2 = max_field(path)
@@ -255,7 +264,7 @@ def _draw_field_map(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
             ax.set_ylabel("纬度", fontsize=9)
             ax.tick_params(labelsize=8)
             fig.tight_layout(pad=1.0)
-            p = OUT_DIR / "field_map_diff.png"
+            p = OUT_DIR / f"field_map_diff_{tag}.png"
             fig.savefig(p, bbox_inches="tight")
             plt.close(fig)
             out_imgs.append(str(p))
