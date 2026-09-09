@@ -485,9 +485,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
     hours = _parse_window_hours(ctx.request.get("time_window", ""))
     target_date = _parse_target_date(ctx.request.get("date", ""))
 
-    # ⭐ Ensemble 集合数据优先（2403/1521/1614：自带总水位/天文潮/增水）
+    # ⭐ Ensemble/FTP 集合数据优先（2403/1521/1614：自带总水位/天文潮/增水）
     ens_path = ctx.files.get("nc_forecast_num", "")
-    if ens_path and "Ensemble" in ens_path.replace("\\", "/"):
+    ens_like = ("Ensemble" in ens_path.replace("\\", "/")) or ("ftp" in ens_path.replace("\\", "/").lower())
+    if ens_path and ens_like:
         sites = _read_ensemble_sites(ens_path)
         if sites:
             sites = _filter_sites(sites, ctx.request)

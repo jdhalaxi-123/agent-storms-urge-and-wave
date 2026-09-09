@@ -45,10 +45,10 @@ def _classify(name: str) -> str:
     """按文件名归类。"""
     if re.search(r"(ocn_forecast|storm_surge_forecast_sp|storm_surge_stations)", name):
         return "station"
-    if re.search(r"output_\d|storm_surge_", name):
+    if re.search(r"_surge\.nc$|output_\d|storm_surge_", name):
         return "surge"
-    if re.search(r"(M1|R1)_wav|wave_forecast|_wave_", name):
-        return "wave"
+    if re.search(r"(M1|R1)_wav|wave_forecast|_wave_|_era5", name):
+        return "wind" if "_era5" in name else "wave"
     if re.search(r"atm_forecast|wind", name):
         return "wind"
     return "other"
@@ -89,9 +89,19 @@ def run(ctx: ModuleContext) -> ModuleContext:
     ctx.files["station_files"] = [f["path"] for f in by_kind["station"]
                                   if target in f["rel"].replace("\\", "/") or target in f["name"]]
 
+    # ⭐ FTP 同步数据优先（data/ftp/{台风}/{台风}_surge.nc: 全量 水位/潮位/增水/风场/气压）
+    ftp_files = [f for f in found if "ftp" in f["rel"].replace("\\", "/").lower() and target in f["name"]]
+    ftp_surge = next((f for f in ftp_files if "_surge" in f["name"] or f["name"].endswith(".nc") and "era5" not in f["name"]), None)
+    if ftp_surge:
+        ctx.files["nc_forecast_num"] = ftp_surge["path"]
+        ctx.files["ftp_sync"] = True
+        _wf = next((f for f in ftp_files if "era5" in f["name"]), None)
+        if _wf:
+            ctx.files["wind_files"] = [_wf["path"]]
+
     # Ensemble 台风集合（2403/1521/1614）：从 Ensemble 目录按台风挑
     ens_files = [f for f in found if "Ensemble" in f["rel"].replace("\\", "/") and target in f["name"]]
-    if ens_files:
+    if ens_files and not ctx.files.get("ftp_sync"):
         ctx.files["ensemble_files"] = [f["path"] for f in ens_files]
         # 主文件：优先 *_irregular_new.nc(float32省内存)，其次 ensemble_*
         best = None
