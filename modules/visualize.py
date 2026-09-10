@@ -275,14 +275,49 @@ def _draw_field_map(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
     return out_imgs
 
 
-def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
-    """风场图：风速填色 + 风向箭头（自动取整个过程风速最强的时刻）。
+def _req_date(ctx: ModuleContext):
+    """解析请求中的目标日期 -> datetime.date 或 None。"""
+    try:
+        from . import geo_stats
+        return geo_stats._parse_target_date(ctx.request.get("date", ""))
+    except Exception:
+        return None
 
-    兼容结构：
-      - 标准 ERA5：(valid_time, latitude, longitude) + u10/v10
-      - MATLAB 转存：u10 维度 (u10_dim0/1/2) + 独立 lat/lon/time 变量
-      - 模式风场：wind_x/wind_y
-    多文件（如 ERA5 逐日）时自动遍历，取全局最强时刻绘制。
+
+def _times_to_dates(times, src_name: str):
+    """把时间数组转成日期数组(datetime64[D])，兼容 datetime64 与小时序号。
+
+    - datetime64：直接降精度到日
+    - 数字（小时序号）：从文件名解析起始日期后累加
+    """
+    import re
+
+    import numpy as np
+
+    arr = np.asarray(times)
+    if arr.size == 0:
+        return None
+    if np.issubdtype(arr.dtype, np.datetime64):
+        return arr.astype("datetime64[D]")
+    # 数字：从文件名解析起点（如 atm_forecast_20251105.nc / 2025110800.nc）
+    m = re.search(r"(\d{4})(\d{2})(\d{2})", str(src_name))
+    if not m:
+        return None
+    try:
+        base = np.datetime64(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+        hours = np.asarray(arr, dtype=float).astype("int64")
+        return base + hours.astype("timedelta64[h]")
+    except Exception:
+        return None
+
+
+def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
+    """风场图：风速填色 + 风向箭头。
+
+    时刻选择规则：
+      - 指定了日期(date) -> 取“该日期内”风速最强时刻
+      - 未指定        -> 取“关注海域(台湾海峡/厦门周边)”风速最强时刻
+    兼容结构：标准 ERA5 / MATLAB 转存 / 模式风场(wind_x,wind_y)；多文件自动遍历。
     """
     import numpy as np
     import xarray as xr
@@ -293,6 +328,8 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
     paths = [p for p in (ctx.files.get("wind_files") or []) if p]
     if not paths:
         return []
+
+    target_date = _req_date(ctx)
 
     # 关注海域（默认台湾海峡/厦门周边）：优先取"该海域风速最强时刻"，
     # 台风靠近时中心在图内更完整、也更贴合业务关注区。
@@ -345,14 +382,38 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
                 mask3 = mask3 & lon_ok.reshape(shp_lon)
                 spd_masked = np.where(mask3, spd_all, np.nan)
                 ts = np.nanmax(spd_masked, axis=(ax_lat, ax_lon))  # 逐时刻(关注海域)
+                ts_all = np.nanmax(spd_all, axis=(ax_lat, ax_lon))  # 逐时刻(全域)
+
+                # ---- 目标日期过滤：只允许该日期的时次 ----
+                date_ok = None
+                tv = None
+                for tname in ("valid_time", "time"):
+                    if tname in ds.variables:
+                        tv = np.asarray(ds[tname].values).ravel()
+                        break
+                if target_date is not None and tv is not None and len(tv) == shape[ax_t]:
+                    dates = _times_to_dates(tv, path)
+                    if dates is not None:
+                        td = target_date
+                        if getattr(td, "year", 2000) == 2000:
+                            try:
+                                td = td.replace(year=int(str(dates[0])[:4]))
+                            except Exception:
+                                pass
+                        date_ok = (dates == np.datetime64(td))
+                        if not date_ok.any():
+                            continue  # 本文件不含目标日期
+                        ts = np.where(date_ok, ts, np.nan)
+                        ts_all = np.where(date_ok, ts_all, np.nan)
+
                 k_focus = None
                 m_focus = -1.0
                 if np.any(np.isfinite(ts)):
                     k_focus = int(np.nanargmax(ts))
                     m_focus = float(np.nanmax(ts))
-                # 全域最强
-                k_all = int(np.nanargmax(np.nanmax(spd_all, axis=(ax_lat, ax_lon))))
-                m_all = float(np.nanmax(spd_all))
+                # 全域最强（同受日期约束）
+                m_all = float(np.nanmax(ts_all)) if np.any(np.isfinite(ts_all)) else -1.0
+                k_all = int(np.nanargmax(ts_all)) if np.any(np.isfinite(ts_all)) else 0
 
                 def _extract(k):
                     sl = [slice(None)] * 3
@@ -365,20 +426,15 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
                         vv_ = vv_.T
                     return uu_, vv_
 
-                tlabel = ""
-                for tname in ("valid_time", "time"):
-                    if tname in ds.variables:
-                        try:
-                            tv = np.asarray(ds[tname].values).ravel()
-                            tlabel_all = str(tv[k_all])[:16].replace("T", " ")
-                            tlabel_focus = str(tv[k_focus])[:16].replace("T", " ") if k_focus is not None else ""
-                        except Exception:
-                            tlabel_all = tlabel_focus = ""
-                        break
-                else:
-                    tlabel_all = tlabel_focus = ""
+                tlabel_all = tlabel_focus = ""
+                if tv is not None:
+                    try:
+                        tlabel_all = str(tv[k_all])[:16].replace("T", " ")
+                        tlabel_focus = str(tv[k_focus])[:16].replace("T", " ") if k_focus is not None else ""
+                    except Exception:
+                        tlabel_all = tlabel_focus = ""
 
-                # 关注海域优先
+                # 关注海域优先（指定日期时该日期即约束）
                 if k_focus is not None and m_focus > 0:
                     uu_, vv_ = _extract(k_focus)
                     if uu_.shape == (nlat, nlon) and (best is None or m_focus > best["score"]):
@@ -386,11 +442,12 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
                                 "uu": uu_, "vv": vv_, "latv": latv, "lonv": lonv,
                                 "tlabel": tlabel_focus, "src": path}
                 # 全域兜底
-                uu_, vv_ = _extract(k_all)
-                if uu_.shape == (nlat, nlon) and (best_global is None or m_all > best_global["score"]):
-                    best_global = {"score": m_all, "max_spd": float(np.nanmax(np.sqrt(uu_ ** 2 + vv_ ** 2))),
-                                   "uu": uu_, "vv": vv_, "latv": latv, "lonv": lonv,
-                                   "tlabel": tlabel_all, "src": path}
+                if m_all > 0:
+                    uu_, vv_ = _extract(k_all)
+                    if uu_.shape == (nlat, nlon) and (best_global is None or m_all > best_global["score"]):
+                        best_global = {"score": m_all, "max_spd": float(np.nanmax(np.sqrt(uu_ ** 2 + vv_ ** 2))),
+                                       "uu": uu_, "vv": vv_, "latv": latv, "lonv": lonv,
+                                       "tlabel": tlabel_all, "src": path}
             elif len(shape) == 2:
                 uu, vv = uarr, varr
                 if uu.shape == (nlon, nlat):
