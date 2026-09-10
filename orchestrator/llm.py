@@ -21,8 +21,11 @@ SYSTEM_PROMPT = (
     "对风暴潮、海浪、海洋预报相关的常识或知识问题，直接清晰回答；"
     "当用户需要查询某个海域的具体预报风险（海水倒灌、增水、浪高、预警等级等）时，"
     "调用 forecast_risk 工具获取结果，再把结果整理成简洁易懂的回复。"
-    "【画图】当用户要求“画/看/展示”某台风的风场图、增水曲线、全场分布图、海浪图时，"
-    "同样调用 forecast_risk 工具（填好 typhoon 与 region），它会生成图片并在对话中显示。"
+    "【画图】当用户要求“画/看/展示”某类图时，调用 forecast_risk 工具，"
+    "并通过 plot 参数**只指定用户要的那一类图**（wind=风场、surge_station=站点过程曲线、"
+    "surge_field=全场增水分布、wave=海浪波高）；"
+    "用户要多种时才用 all。切忌用户只要一种却把各类图都画出来。"
+    "用户没提图时不要传 plot（默认按灾种给一张核心图）。"
     "当用户询问数据库/数据位置（如“XX数据在哪”“FTP上有什么”“有没有XX台风的YY数据”）时，"
     "调用 ftp_query 工具查询课题数据库，并把查到的路径/目录内容清楚告诉用户；"
     "只报告工具实际返回的路径，不要推测不存在的路径。"
@@ -55,6 +58,16 @@ FORECAST_TOOL = {
                 "risk_type": {"type": "string", "description": "风险类型，如：海水倒灌、增水、浪高"},
                 "typhoon": {"type": "string", "description": "台风编号（可省略），如：2526、2403、1521、1614；用户未指定台风时省略"},
                 "date": {"type": "string", "description": "查看日期（可省略），如：7月22日、2024-07-22；用户指定具体日期时填写，否则省略"},
+                "plot": {
+                    "type": "string",
+                    "enum": ["wind", "surge_station", "surge_field", "wave", "all"],
+                    "description": (
+                        "需要出图时填写图类型（问什么画什么，不要多给）："
+                        "wind=风场图；surge_station=站点增水/水位过程曲线；"
+                        "surge_field=全场增水空间分布；wave=海浪波高曲线；"
+                        "all=全部图。用户没明确要图时省略（默认按灾种给一张核心图）。"
+                    ),
+                },
             },
             "required": ["disaster"],
         },
@@ -171,6 +184,7 @@ def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
         "time_window": args.get("time_window", "未指定"),
         "typhoon": args.get("typhoon", ""),
         "date": args.get("date", ""),
+        "plot": args.get("plot", ""),
         "raw": "llm",
     }
     result = engine.run_with_slots(slots, raw=json.dumps(args, ensure_ascii=False))

@@ -61,11 +61,29 @@ def run(ctx: ModuleContext) -> ModuleContext:
         _setup_cn_font()
 
         disaster = ctx.request.get("disaster", "storm_surge")
+        plot = str(ctx.request.get("plot", "") or "").strip().lower()
         tag = _tag(ctx)
         OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-        if disaster == "wave":
-            # ===== 海浪曲线 =====
+        def want(kind: str) -> bool:
+            """是否需要某类图。
+
+            - 明确指定 plot（wind/surge_station/surge_field/wave/all）→ 只画指定类型
+            - 未指定 → 按灾种给“核心图”一张：
+                storm_surge → 站点增水/水位曲线
+                wave        → 海浪波高曲线
+              （全场分布、风场等按需索取，不再默认全给）
+            """
+            if plot:
+                return plot in (kind, "all")
+            if kind == "wave":
+                return disaster == "wave"
+            if kind == "surge_station":
+                return disaster != "wave"
+            return False
+
+        # ===== 海浪波高曲线 =====
+        if want("wave"):
             ws = ctx.results.get("wave_stats", {}) or {}
             series = ws.get("series") or []
             if series:
@@ -90,15 +108,9 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 fig.savefig(path, bbox_inches="tight")
                 plt.close(fig)
                 images.append(str(path))
-            # 海浪也附风暴潮站点图（双图）
-            geo = ctx.results.get("geo_stats", {}) or {}
-            sites = geo.get("sites") or []
-            if sites:
-                p2 = _draw_surge(OUT_DIR, sites, ctx, tag)
-                if p2:
-                    images.append(str(p2))
-        else:
-            # ===== 风暴潮增水曲线 =====
+
+        # ===== 站点增水/水位过程曲线 =====
+        if want("surge_station"):
             geo = ctx.results.get("geo_stats", {}) or {}
             sites = geo.get("sites") or []
             if sites:
@@ -106,13 +118,15 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 if p:
                     images.append(str(p))
 
-        # ===== 全场增水空间分布图（output_0 数值 + output_4 AI/融合 对比） =====
-        field_imgs = _draw_field_map(OUT_DIR, ctx, tag)
-        images.extend(field_imgs)
+        # ===== 全场增水空间分布图（数值 + AI/融合 + 差异） =====
+        if want("surge_field"):
+            field_imgs = _draw_field_map(OUT_DIR, ctx, tag)
+            images.extend(field_imgs)
 
-        # ===== 风场图（ERA5 / 模式风场：风速填色 + 风向箭头） =====
-        wind_imgs = _draw_wind_field(OUT_DIR, ctx, tag)
-        images.extend(wind_imgs)
+        # ===== 风场图（风速填色 + 风向箭头） =====
+        if want("wind"):
+            wind_imgs = _draw_wind_field(OUT_DIR, ctx, tag)
+            images.extend(wind_imgs)
     except Exception:
         pass  # 画图失败不影响文字
 
