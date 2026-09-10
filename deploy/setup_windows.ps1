@@ -33,12 +33,26 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 # 项目根目录（由 1-一键部署-Windows.bat 传入；直接运行时按脚本位置推断）
-if ($Root) { $Root = $Root.TrimEnd("\", "/") }
-if (-not $Root -or -not (Test-Path (Join-Path $Root "main.py"))) {
-    $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-    if (-not (Test-Path (Join-Path $Root "main.py"))) { $Root = (Get-Location).Path }
+# 注意：cmd 传参时 "E:\Agent\" 里的 \" 会被当成转义引号，
+#       所以收到的值可能带尾部引号/反斜杠，这里统一清理并逐级兜底。
+$RootGiven = ""
+if ($Root) { $RootGiven = $Root.Trim().Trim('"').Trim("'").TrimEnd("\", "/") }
+$Root = $null
+foreach ($c in @($RootGiven, (Split-Path -Parent $PSScriptRoot), $PSScriptRoot, (Get-Location).Path)) {
+    if ($c -and (Test-Path (Join-Path $c "main.py") -ErrorAction SilentlyContinue)) {
+        $Root = (Resolve-Path $c).Path
+        break
+    }
 }
-$Root = (Resolve-Path $Root).Path
+if (-not $Root) {
+    Write-Host ""
+    Write-Host "   [错误] 找不到 main.py，无法确定项目目录。" -ForegroundColor Red
+    Write-Host "          请确认整个压缩包都解压出来了（根目录应能看到 main.py）。" -ForegroundColor Yellow
+    Write-Host "          当前脚本位置：$PSScriptRoot" -ForegroundColor Yellow
+    Write-Host ""
+    if (-not [Console]::IsInputRedirected) { Read-Host "按回车退出" }
+    exit 1
+}
 Set-Location $Root
 
 $Venv = Join-Path $Root ".venv"

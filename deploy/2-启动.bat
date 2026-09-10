@@ -9,6 +9,9 @@ set "ROOT=%HERE%"
 if not exist "%HERE%deploy\win_start.ps1" set "DP=%HERE%"
 if not exist "%HERE%main.py" set "ROOT=%HERE%.."
 
+rem strip the trailing backslash of %~dp0 (it would escape the quote)
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+
 if not exist "%DP%win_start.ps1" (
   echo.
   echo [ERROR] win_start.ps1 not found - the package looks incomplete.

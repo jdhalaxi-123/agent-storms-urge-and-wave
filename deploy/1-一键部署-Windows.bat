@@ -10,6 +10,11 @@ set "ROOT=%HERE%"
 if not exist "%HERE%deploy\setup_windows.ps1" set "DP=%HERE%"
 if not exist "%HERE%main.py" set "ROOT=%HERE%.."
 
+rem IMPORTANT: %~dp0 always ends with a backslash. Passing "E:\App\"
+rem to powershell.exe makes the trailing \" an escaped quote, so
+rem PowerShell would see E:\App" - strip it here.
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%DP%setup_windows.ps1" -Root "%ROOT%"
 set EC=%ERRORLEVEL%
 
