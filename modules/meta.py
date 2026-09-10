@@ -41,15 +41,19 @@ def scan(folder: Path) -> List[Dict[str, Any]]:
     ]
 
 
-def _classify(name: str) -> str:
-    """按文件名归类。"""
+def _classify(name: str, rel: str = "") -> str:
+    """按文件名/路径归类。"""
+    r = (rel or name).replace("\\", "/").lower()
     if re.search(r"(ocn_forecast|storm_surge_forecast_sp|storm_surge_stations)", name):
         return "station"
     if re.search(r"_surge\.nc$|output_\d|storm_surge_", name):
         return "surge"
-    if re.search(r"(M1|R1)_wav|wave_forecast|_wave_|_era5", name):
-        return "wind" if "_era5" in name else "wave"
-    if re.search(r"atm_forecast|wind", name):
+    # ERA5 风场目录 / 文件名
+    if "/era5/" in r or "_era5" in name.lower() or re.search(r"^\d{10}\.nc$", name):
+        return "wind"
+    if re.search(r"(M1|R1)_wav|wave_forecast|_wave_", name):
+        return "wave"
+    if re.search(r"atm_forecast|wind", name, re.I):
         return "wind"
     return "other"
 
@@ -76,7 +80,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
     by_kind: Dict[str, List[Dict[str, Any]]] = {"station": [], "surge": [], "wave": [], "wind": [], "other": []}
     for f in found:
-        by_kind[_classify(f["name"])].append(f)
+        by_kind[_classify(f["name"], f.get("rel", ""))].append(f)
 
     # 目标台风数据筛选（默认 2526）
     target = req_id or "2526"

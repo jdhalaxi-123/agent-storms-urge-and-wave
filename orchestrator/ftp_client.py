@@ -212,8 +212,83 @@ def download(remote: str, local: str) -> bool:
     except Exception as e:
         print(f"下载失败 {remote}:", e)
         return False
+
+
+def sync_dir(remote_dir: str, local_dir: str = "", keyword: str = "", max_files: int = 20) -> dict:
+    """同步一个 FTP 目录下的文件到本地（供对话调用）。
+
+    参数:
+        remote_dir: FTP 目录，如 /group3/wind/typhoon_2526
+        local_dir:  本地目录（缺省 data/ftp/<目录名>）
+        keyword:    只同步文件名含关键字的（可选）
+        max_files:  最多同步文件数（默认20，防止误拉过大）
+
+    返回 {"ok":..., "downloaded": [...], "skipped": [...], "failed": [...], "total_mb": ...}
+    """
+    import shutil
+
+    try:
+        ftp = _connect()
+    except Exception as e:
+        return {"ok": False, "error": f"FTP连接失败: {e}"}
+    try:
+        # 列出远程文件
+        items = []
+        for name, meta in ftp.mlsd(remote_dir or "/"):
+            if meta.get("type") != "file":
+                continue
+            if keyword and keyword.lower() not in name.lower():
+                continue
+            items.append((name, int(meta.get("size", 0) or 0)))
+        items.sort()
+        if not items:
+            return {"ok": False, "error": f"目录下没有匹配文件: {remote_dir}"}
+        picked = items[:max_files]
+
+        base = Path(local_dir) if local_dir else (
+            Path(__file__).resolve().parent.parent / "data" / "ftp" / (remote_dir.rstrip("/").split("/")[-1] or "misc")
+        )
+        base.mkdir(parents=True, exist_ok=True)
+
+        downloaded, skipped, failed = [], [], []
+        total_mb = 0.0
+        for name, size in picked:
+            local = base / name
+            remote = remote_dir.rstrip("/") + "/" + name
+            if local.exists() and local.stat().st_size == size:
+                skipped.append(name)
+                continue
+            tmp = local.with_suffix(local.suffix + ".part")
+            try:
+                with open(tmp, "wb") as f:
+                    ftp.retrbinary(f"RETR {remote}", f.write)
+                shutil.move(str(tmp), str(local))
+                downloaded.append(name)
+                total_mb += size / 1e6
+                print(f"[下载] {name} ({size/1e6:.0f}MB)")
+            except Exception as e:
+                if tmp.exists():
+                    tmp.unlink(missing_ok=True)
+                failed.append(f"{name}: {e}")
+        return {
+            "ok": True,
+            "remote_dir": remote_dir,
+            "local_dir": str(base),
+            "downloaded": downloaded,
+            "skipped": skipped,
+            "failed": failed,
+            "total_mb": round(total_mb, 1),
+            "note": f"共 {len(items)} 个匹配文件，本次处理 {len(picked)} 个" + (
+                f"（超过上限{max_files}个，已截断）" if len(items) > max_files else ""
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
     finally:
-        ftp.quit()
+        try:
+            ftp.quit()
+        except Exception:
+            pass
 
 
 def sync_typhoon(typhoon: str, with_wind: bool = True, force: bool = False) -> list:

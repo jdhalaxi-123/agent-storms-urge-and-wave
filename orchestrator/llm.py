@@ -22,7 +22,9 @@ SYSTEM_PROMPT = (
     "当用户需要查询某个海域的具体预报风险（海水倒灌、增水、浪高、预警等级等）时，"
     "调用 forecast_risk 工具获取结果，再把结果整理成简洁易懂的回复。"
     "当用户询问数据库/数据位置（如“XX数据在哪”“FTP上有什么”“有没有XX台风的YY数据”）时，"
-    "调用 ftp_query 工具查询课题数据库，并把查到的路径/目录内容清楚告诉用户。"
+    "调用 ftp_query 工具查询课题数据库，并把查到的路径/目录内容清楚告诉用户；"
+    "只报告工具实际返回的路径，不要推测不存在的路径。"
+    "当用户明确要求下载/同步某数据时，调用 ftp_sync 工具同步到本地，并告知同步了多少文件/多大。"
 )
 
 FORECAST_TOOL = {
@@ -56,9 +58,12 @@ FTP_TOOL = {
         "name": "ftp_query",
         "description": (
             "查询课题数据库(FTP)上的数据目录/文件位置。用户问“数据在哪”“FTP上有什么”“有没有XX数据”时调用。"
-            "可列目录或按关键字搜索。FTP 根目录下有 group1~group5（对应课题一~五）；"
+            "FTP 根目录下有 group1~group5（对应课题一~五）；"
             "group1/storm_surge 是风暴潮场, group1/storm_surge/era5 是ERA5风场, "
             "group3/wind 是风场, group3/storm_surge_point 是风暴潮单点。"
+            "【重要】只能报告本工具实际返回的路径/文件名，"
+            "绝不能凭推测补充未在返回结果中出现的路径；"
+            "若某目录不存在会在返回中体现，请如实告知用户“该路径不存在”。"
         ),
         "parameters": {
             "type": "object",
@@ -68,6 +73,29 @@ FTP_TOOL = {
                 "search_root": {"type": "string", "description": "可选：递归搜索的起始目录（与keyword配合），如 /group1"},
             },
             "required": [],
+        },
+    },
+}
+
+
+FTP_SYNC_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ftp_sync",
+        "description": (
+            "从课题数据库(FTP)同步数据到本地，供后续预报/绘图使用。"
+            "当用户明确要求“下载/同步/拉取某数据”时调用。"
+            "注意：单个文件可达数百MB，应先用 ftp_query 确认目录内容，"
+            "并在同步前告知用户预计数据量；默认最多同步20个文件。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "remote_dir": {"type": "string", "description": "要同步的FTP目录，如 /group3/wind/typhoon_2526"},
+                "keyword": {"type": "string", "description": "可选：只同步文件名含此关键字的文件，如 2025111"},
+                "max_files": {"type": "integer", "description": "可选：最多同步文件数，默认20"},
+            },
+            "required": ["remote_dir"],
         },
     },
 }
@@ -109,6 +137,17 @@ def _call_ftp(args: Dict[str, Any]) -> Dict[str, Any]:
     else:
         res = ftp_client.query(args.get("path") or "/", keyword)
     return res
+
+
+def _call_ftp_sync(args: Dict[str, Any]) -> Dict[str, Any]:
+    """执行 FTP 同步工具：把远程目录下的文件拉到本地。"""
+    from . import ftp_client
+
+    return ftp_client.sync_dir(
+        args.get("remote_dir", ""),
+        keyword=(args.get("keyword") or "").strip(),
+        max_files=int(args.get("max_files") or 20),
+    )
 
 
 def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -153,7 +192,7 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
     messages.append({"role": "user", "content": str(message)})
 
     # 第一次调用：LLM 决定直接回答还是调工具
-    resp = client.chat.completions.create(model=MODEL, messages=messages, tools=[FORECAST_TOOL, FTP_TOOL], timeout=120)
+    resp = client.chat.completions.create(model=MODEL, messages=messages, tools=[FORECAST_TOOL, FTP_TOOL, FTP_SYNC_TOOL], timeout=120)
     msg = resp.choices[0].message
 
     # 未调工具：直接返回文本
@@ -183,6 +222,8 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
         # 按工具名分发
         if tc.function.name == "ftp_query":
             result = _call_ftp(args)
+        elif tc.function.name == "ftp_sync":
+            result = _call_ftp_sync(args)
         else:
             result = _call_forecast(args)
             if result.get("images"):

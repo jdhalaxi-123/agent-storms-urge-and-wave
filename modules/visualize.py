@@ -109,6 +109,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
         # ===== 全场增水空间分布图（output_0 数值 + output_4 AI/融合 对比） =====
         field_imgs = _draw_field_map(OUT_DIR, ctx, tag)
         images.extend(field_imgs)
+
+        # ===== 风场图（ERA5 / 模式风场：风速填色 + 风向箭头） =====
+        wind_imgs = _draw_wind_field(OUT_DIR, ctx, tag)
+        images.extend(wind_imgs)
     except Exception:
         pass  # 画图失败不影响文字
 
@@ -269,3 +273,130 @@ def _draw_field_map(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
             plt.close(fig)
             out_imgs.append(str(p))
     return out_imgs
+
+
+def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
+    """风场图：风速填色 + 风向箭头（取风速最大时刻）。
+
+    兼容三种结构：
+      - 标准 ERA5：(valid_time, latitude, longitude) + u10/v10
+      - MATLAB 转存：u10 维度为 (u10_dim0, u10_dim1, u10_dim2) + 独立 lat/lon/time 变量
+      - 2526 output_4 内置：wind_x/wind_y (time, lat, lon)
+    """
+    import numpy as np
+    import xarray as xr
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    wind_path = None
+    wf = ctx.files.get("wind_files") or []
+    if wf:
+        wind_path = wf[0]
+    if not wind_path:
+        return []
+    try:
+        ds = xr.open_dataset(wind_path, decode_times=True)
+    except Exception:
+        return []
+    out = []
+    try:
+        uvar = "u10" if "u10" in ds.variables else ("wind_x" if "wind_x" in ds.variables else None)
+        vvar = "v10" if "v10" in ds.variables else ("wind_y" if "wind_y" in ds.variables else None)
+        if uvar is None or vvar is None:
+            return []
+        u = ds[uvar]
+        v = ds[vvar]
+
+        # --- 识别时间维 ---
+        tdim = None
+        for d in u.dims:
+            if d in ("valid_time", "time") or d.startswith("time"):
+                tdim = d
+                break
+
+        # --- 识别经纬度 ---
+        latv = lonv = None
+        for cand in ("latitude", "lat"):
+            if cand in ds.variables:
+                latv = np.asarray(ds[cand].values).ravel()
+                break
+        for cand in ("longitude", "lon"):
+            if cand in ds.variables:
+                lonv = np.asarray(ds[cand].values).ravel()
+                break
+        if latv is None or lonv is None:
+            return []
+
+        # --- 取风速最大时刻 + 对齐为 (lat, lon) ---
+        nlat, nlon = len(latv), len(lonv)
+        # 找各轴：哪个轴等于 nlat / nlon，剩下的当作时间轴
+        shape = u.shape
+        ax_lat = next((i for i, s in enumerate(shape) if s == nlat), None)
+        ax_lon = next((i for i, s in enumerate(shape) if s == nlon), None)
+        uarr = np.asarray(u.values, dtype=float)
+        varr = np.asarray(v.values, dtype=float)
+
+        if ax_lat is not None and ax_lon is not None and len(shape) == 3:
+            ax_t = next((i for i in range(3) if i not in (ax_lat, ax_lon)), None)
+            # 取风速最大时刻
+            if ax_t is not None:
+                spd_all = np.sqrt(uarr ** 2 + varr ** 2)
+                # 沿 lat/lon 轴取最大 -> 逐时刻序列
+                k = int(np.nanargmax(np.nanmax(spd_all, axis=(ax_lat, ax_lon))))
+                sl = [slice(None)] * 3
+                sl[ax_t] = k
+                uu = uarr[tuple(sl)]
+                vv = varr[tuple(sl)]
+                try:
+                    tv = np.asarray(ds["time"].values).ravel()
+                    tlabel = str(tv[k])[:16].replace("T", " ")
+                except Exception:
+                    tlabel = f"第{k}时次"
+            else:
+                uu, vv = uarr[:, :, 0], varr[:, :, 0]
+                tlabel = ""
+            # 转成 (lat, lon)
+            if (ax_lat, ax_lon) == (0, 1):
+                pass
+            else:
+                uu = uu.T
+                vv = vv.T
+        elif len(shape) == 2:
+            uu, vv = uarr, varr
+            if uu.shape == (nlon, nlat):
+                uu, vv = uu.T, vv.T
+            tlabel = ""
+        else:
+            return []
+
+        if uu.shape != (nlat, nlon):
+            return []
+
+        spd = np.sqrt(uu ** 2 + vv ** 2)
+        LON, LAT = np.meshgrid(lonv, latv)
+        rgn = ctx.request.get("region", "") or ""
+        typh = str(ctx.request.get("typhoon", "") or "")
+
+        fig, ax = plt.subplots(figsize=(7.4, 4.4), dpi=110)
+        pc = ax.pcolormesh(LON, LAT, spd, cmap="YlOrRd", shading="auto")
+        cb = fig.colorbar(pc, ax=ax, shrink=0.9)
+        cb.set_label("风速 (m/s)", fontsize=8)
+        step = max(1, LON.shape[0] // 16)
+        ax.quiver(LON[::step, ::step], LAT[::step, ::step],
+                  uu[::step, ::step], vv[::step, ::step],
+                  color="k", width=0.0025, scale=350, alpha=0.85)
+        ax.set_title(f"{typh}台风 风场{tlabel and '（' + tlabel + '）'} 最大风速 {np.nanmax(spd):.1f} m/s", fontsize=11)
+        ax.set_xlabel("经度", fontsize=9)
+        ax.set_ylabel("纬度", fontsize=9)
+        ax.tick_params(labelsize=8)
+        fig.tight_layout(pad=1.0)
+        fp = OUT_DIR / f"wind_field_{tag}.png"
+        fig.savefig(fp, bbox_inches="tight")
+        plt.close(fig)
+        out.append(str(fp))
+    except Exception:
+        pass
+    finally:
+        ds.close()
+    return out
