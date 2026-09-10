@@ -11,7 +11,7 @@ import os
 
 import gradio as gr
 
-from orchestrator import asr, llm
+from orchestrator import asr, llm, memory
 
 THINKING = "🔍 正在思考中，请稍候…"
 
@@ -73,9 +73,27 @@ def _respond(text, audio_path, history):
     except Exception as exc:
         bot_text, images = f"（处理出错：{exc}）", []
 
-    # ③ 替换占位为完整回答
+    # ③ 替换占位为完整回答（并记录本轮对话）
     new_history = history + [[text, (bot_text, images or [])]]
+    try:
+        memory.append_chat(text, bot_text, {"images": len(images or [])})
+    except Exception:
+        pass
     yield _to_messages(new_history), "", None, new_history
+
+
+def _load_recent_into_chat(n: int = 10):
+    """把最近 n 轮历史对话载入聊天窗口（便于接着聊/回看）。"""
+    recs = memory.recent_chats(n)
+    hist = []
+    for r in recs:
+        hist.append([r.get("user", ""), (r.get("bot", ""), [])])
+    return _to_messages(hist), "", None, hist, memory.render_history_md(20)
+
+
+def _refresh_history(n: int = 20):
+    """刷新历史面板。"""
+    return memory.render_history_md(n)
 
 
 # ===== 点击图片弹大图（模态框 JS，参考教程方案） =====
@@ -217,6 +235,33 @@ with gr.Blocks(
     send.click(_respond, inputs, outputs)
     mic.stop_recording(_respond, inputs, outputs)
 
+    # ===== 历史对话记录面板 =====
+    with gr.Accordion("📜 历史对话记录", open=False):
+        hist_md = gr.Markdown(memory.render_history_md(20))
+        with gr.Row():
+            btn_refresh = gr.Button("🔄 刷新历史", size="sm")
+            btn_load = gr.Button("⬇️ 载入最近10轮到窗口", size="sm")
+        btn_refresh.click(_refresh_history, inputs=[], outputs=[hist_md])
+        btn_load.click(
+            _load_recent_into_chat,
+            inputs=[],
+            outputs=[chatbot, txt, mic, history, hist_md],
+        )
+
 
 if __name__ == "__main__":
-    demo.launch()
+    import time
+
+    try:
+        # prevent_thread_lock=True: launch 立即返回（不阻塞），服务在后台线程运行；
+        # 健康检查失败(沙箱网络)不影响已监听的端口
+        demo.launch(prevent_thread_lock=True, quiet=True, show_error=False)
+    except Exception:
+        # 即便 launch 因健康检查抛错，服务可能已起来；保活进程
+        pass
+    # 保活：让进程持续运行（服务在后台线程）
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        pass
