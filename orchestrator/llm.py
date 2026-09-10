@@ -21,6 +21,8 @@ SYSTEM_PROMPT = (
     "对风暴潮、海浪、海洋预报相关的常识或知识问题，直接清晰回答；"
     "当用户需要查询某个海域的具体预报风险（海水倒灌、增水、浪高、预警等级等）时，"
     "调用 forecast_risk 工具获取结果，再把结果整理成简洁易懂的回复。"
+    "当用户询问数据库/数据位置（如“XX数据在哪”“FTP上有什么”“有没有XX台风的YY数据”）时，"
+    "调用 ftp_query 工具查询课题数据库，并把查到的路径/目录内容清楚告诉用户。"
 )
 
 FORECAST_TOOL = {
@@ -43,6 +45,29 @@ FORECAST_TOOL = {
                 "date": {"type": "string", "description": "查看日期（可省略），如：7月22日、2024-07-22；用户指定具体日期时填写，否则省略"},
             },
             "required": ["region", "disaster"],
+        },
+    },
+}
+
+
+FTP_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ftp_query",
+        "description": (
+            "查询课题数据库(FTP)上的数据目录/文件位置。用户问“数据在哪”“FTP上有什么”“有没有XX数据”时调用。"
+            "可列目录或按关键字搜索。FTP 根目录下有 group1~group5（对应课题一~五）；"
+            "group1/storm_surge 是风暴潮场, group1/storm_surge/era5 是ERA5风场, "
+            "group3/wind 是风场, group3/storm_surge_point 是风暴潮单点。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "要查看的FTP目录，如 /group3/wind；缺省 /"},
+                "keyword": {"type": "string", "description": "可选：按关键字过滤或搜索，如 2526、wave、storm_surge"},
+                "search_root": {"type": "string", "description": "可选：递归搜索的起始目录（与keyword配合），如 /group1"},
+            },
+            "required": [],
         },
     },
 }
@@ -71,6 +96,19 @@ def _get_client() -> OpenAI:
     if _client is None:
         _client = OpenAI(api_key=_load_api_key(), base_url=BASE_URL)
     return _client
+
+
+def _call_ftp(args: Dict[str, Any]) -> Dict[str, Any]:
+    """执行 FTP 查询工具：列目录 或 关键字搜索。"""
+    from . import ftp_client
+
+    keyword = (args.get("keyword") or "").strip()
+    search_root = (args.get("search_root") or "").strip()
+    if keyword and search_root:
+        res = ftp_client.search(search_root, keyword)
+    else:
+        res = ftp_client.query(args.get("path") or "/", keyword)
+    return res
 
 
 def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -115,7 +153,7 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
     messages.append({"role": "user", "content": str(message)})
 
     # 第一次调用：LLM 决定直接回答还是调工具
-    resp = client.chat.completions.create(model=MODEL, messages=messages, tools=[FORECAST_TOOL], timeout=120)
+    resp = client.chat.completions.create(model=MODEL, messages=messages, tools=[FORECAST_TOOL, FTP_TOOL], timeout=120)
     msg = resp.choices[0].message
 
     # 未调工具：直接返回文本
@@ -142,8 +180,13 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
             args = json.loads(tc.function.arguments or "{}")
         except json.JSONDecodeError:
             args = {}
-        result = _call_forecast(args)
-        images = result.get("images", [])
+        # 按工具名分发
+        if tc.function.name == "ftp_query":
+            result = _call_ftp(args)
+        else:
+            result = _call_forecast(args)
+            if result.get("images"):
+                images = result["images"]
         messages.append({
             "role": "tool",
             "tool_call_id": tc.id,

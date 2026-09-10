@@ -71,6 +71,110 @@ def cwd(ftp) -> str:
         return "/"
 
 
+# --------------------------------------------------------------------------- #
+# 对话式查询接口（供 LLM 工具调用）
+# --------------------------------------------------------------------------- #
+def query(path: str = "/", keyword: str = "", max_items: int = 60) -> dict:
+    """查询 FTP 目录，返回结构化结果（供 LLM 整理成自然语言回答）。
+
+    参数:
+        path:     要查询的目录，如 "/group3/wind"
+        keyword:  可选，按关键字过滤文件名/目录名（如 "2526"、"wave"）
+        max_items: 最多返回条目数（防止输出过长）
+
+    返回:
+        {"ok": True, "path": ..., "total": n, "dirs": [...], "files": [...],
+         "note": ...}
+        或 {"ok": False, "error": "..."}
+    """
+    try:
+        ftp = _connect()
+    except Exception as e:
+        return {"ok": False, "error": f"FTP 连接失败: {e}"}
+    try:
+        dirs, files = [], []
+        for name, meta in ftp.mlsd(path or "/"):
+            if name in (".", ".."):
+                continue
+            if keyword and keyword.lower() not in name.lower():
+                continue
+            if meta.get("type") == "dir":
+                dirs.append(name)
+            else:
+                try:
+                    size_mb = round(int(meta.get("size", 0)) / 1e6, 1)
+                except Exception:
+                    size_mb = None
+                files.append({"name": name, "size_mb": size_mb})
+        dirs.sort()
+        files.sort(key=lambda x: x["name"])
+        total = len(dirs) + len(files)
+        note = ""
+        if total > max_items:
+            note = f"（共 {total} 项，仅显示前 {max_items} 项）"
+            dirs = dirs[: max_items // 2]
+            files = files[: max_items // 2]
+        return {
+            "ok": True,
+            "path": path,
+            "keyword": keyword or None,
+            "total": total,
+            "dirs": dirs,
+            "files": files,
+            "note": note,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"列目录失败（路径可能不存在）: {e}"}
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            pass
+
+
+def search(root: str, keyword: str, max_depth: int = 3, max_hits: int = 40) -> dict:
+    """在 FTP 上递归搜索（按关键字匹配 目录名/文件名）。
+
+    返回 {"ok": True, "hits": [{"path":..., "type": "dir"/"file", "size_mb":...}]}
+    """
+    if not keyword:
+        return {"ok": False, "error": "请提供关键字"}
+    try:
+        ftp = _connect()
+    except Exception as e:
+        return {"ok": False, "error": f"FTP 连接失败: {e}"}
+    hits = []
+    try:
+        def walk(p, d):
+            if d > max_depth or len(hits) >= max_hits:
+                return
+            try:
+                entries = list(ftp.mlsd(p or "/"))
+            except Exception:
+                return
+            for name, meta in entries:
+                if name in (".", ".."):
+                    continue
+                full = p.rstrip("/") + "/" + name
+                if keyword.lower() in name.lower():
+                    hits.append({
+                        "path": full,
+                        "type": "dir" if meta.get("type") == "dir" else "file",
+                        "size_mb": round(int(meta.get("size", 0)) / 1e6, 1) if meta.get("type") != "dir" else None,
+                    })
+                if meta.get("type") == "dir":
+                    walk(full, d + 1)
+        walk(root, 0)
+        return {"ok": True, "root": root, "keyword": keyword, "hits": hits[:max_hits], "count": len(hits)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            pass
+
+
 def tree(path: str = "/", depth: int = 0, max_depth: int = 3) -> None:
     if depth > max_depth:
         return
