@@ -250,18 +250,68 @@ with gr.Blocks(
 
 
 if __name__ == "__main__":
+    import os
     import time
+    import webbrowser
+
+    HOST = os.environ.get("STORM_HOST", "127.0.0.1")
+    PORT = int(os.environ.get("STORM_PORT", "7860"))
+    URL = f"http://{'localhost' if HOST in ('127.0.0.1', '0.0.0.0') else HOST}:{PORT}"
+
+    print()
+    print("=" * 64)
+    print("   风暴潮与海浪智能预报助手")
+    print("=" * 64)
+    # 部署自检提示：没有 .env 或没填密钥时给一句人话，避免用户对着界面发呆
+    try:
+        from orchestrator.llm import _load_api_key  # noqa: WPS433
+        _load_api_key()
+    except Exception as e:  # noqa: BLE001
+        print("   [提醒] 还没配置 DeepSeek API Key：%s" % e)
+        print("          请编辑项目目录下的 .env 文件，填入 DEEPSEEK_API_KEY=sk-xxxx")
+        print()
+    print(f"   网页地址：{URL}")
+    print("   关闭本窗口 = 停止服务（或按 Ctrl+C）")
+    print("=" * 64)
+    print("   正在启动服务，约 10~30 秒，请稍候……")
+    print()
 
     try:
         # prevent_thread_lock=True: launch 立即返回（不阻塞），服务在后台线程运行；
         # 健康检查失败(沙箱网络)不影响已监听的端口
-        demo.launch(prevent_thread_lock=True, quiet=True, show_error=False)
-    except Exception:
+        demo.launch(server_name=HOST, server_port=PORT,
+                    prevent_thread_lock=True, quiet=True, show_error=False)
+    except Exception as e:  # noqa: BLE001
         # 即便 launch 因健康检查抛错，服务可能已起来；保活进程
-        pass
+        print(f"   [注意] launch 返回异常（服务可能已正常启动）：{e}")
+
+    # 自动打开浏览器（部署到新电脑时省得用户找地址）
+    def _open_browser() -> None:
+        time.sleep(6)
+        for _ in range(10):
+            try:
+                import urllib.request
+                urllib.request.urlopen(URL, timeout=3)
+                break
+            except Exception:  # noqa: BLE001
+                time.sleep(2)
+        try:
+            webbrowser.open(URL)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if os.environ.get("STORM_NO_BROWSER", "") not in ("1", "true", "True"):
+        try:
+            import threading
+            threading.Thread(target=_open_browser, daemon=True).start()
+        except Exception:  # noqa: BLE001
+            pass
+
+    print(f"   >>> 如果浏览器没有自动打开，请手动访问：{URL}")
+    print()
     # 保活：让进程持续运行（服务在后台线程）
     try:
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
-        pass
+        print("\n服务已停止。")

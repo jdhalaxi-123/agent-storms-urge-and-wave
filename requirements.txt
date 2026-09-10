@@ -1,5 +1,38 @@
+# ============================================================
+#  stormsuregent 运行依赖（Python 3.10 / 3.11 / 3.12 均可）
+#  安装：pip install -r requirements.txt
+#  国内加速：pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# ============================================================
+
+# ---- 网页对话界面 ----
 gradio>=5.0,<6.0
-pyyaml>=5.4
-openai>=1.0
+
+# ---- 大模型对话大脑 ----
+openai>=1.30
+
+# ---- 数值数据处理（读 NetCDF / 统计）----
+numpy>=1.24
+pandas>=2.0
+xarray>=2024.1
+netCDF4>=1.6
+scipy>=1.10
+cftime>=1.6
+
+# ---- 出图 ----
+matplotlib>=3.7
+
+# ---- Word 简报导出 ----
+python-docx>=1.1
+
+# ---- 配置 ----
+PyYAML>=6.0
+
+# ---- 语音输入（本地识别，免密钥）----
 faster-whisper>=1.0
+ctranslate2>=4.0
+av>=11.0
+tokenizers>=0.15
+onnxruntime>=1.16
+
+# ---- 语音输入（腾讯云识别，可选：不填密钥会自动回退本地）----
 tencentcloud-sdk-python-asr>=3.1.166

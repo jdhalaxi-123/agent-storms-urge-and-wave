@@ -46,12 +46,32 @@ stormsurgeagent/
 
 ## 快速开始
 
+### 方式一：一键部署（推荐，给交付对象）
+
+交付包解压后双击 `1-一键部署-Windows.bat`：自动装 Python → 建虚拟环境 → 装依赖 →
+引导填 DeepSeek API Key → 启动并自动打开浏览器。以后启动双击 `2-启动.bat`。
+
+装不上时双击 `3-环境自检.bat`，会生成一份《环境自检报告.md》，
+里面包含系统位数、Python、pip 源连通性、磁盘、端口、数据目录等事实，
+**可以直接复制给 AI 助手，让它判断缺什么**。详见 `deploy/部署说明.md`。
+
+### 方式二：手工
+
 ```bash
-cd stormsuregent
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env      # 填入自己的 DeepSeek / 腾讯云密钥
-python scripts/make_sample_data.py   # 一键生成样例 NC 数据（约30MB，可选）
-python main.py
+copy .env.example .env      # 然后填入 DEEPSEEK_API_KEY
+python main.py              # 浏览器打开 http://localhost:7860
+```
+
+打交付包：`python scripts/build_deploy_package.py` → `dist/…-部署包-YYYYMMDD.zip`
+（自动排除 `.venv`/`data`/`outputs`/密钥/对话记录）。
+
+### 样例数据（可选）
+
+```bash
+python scripts/make_sample_data.py   # 一键生成样例 NC 数据（约30MB）
 ```
 
 浏览器打开 http://localhost:7860 ，输入：
