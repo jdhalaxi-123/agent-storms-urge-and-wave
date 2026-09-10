@@ -276,12 +276,13 @@ def _draw_field_map(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
 
 
 def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
-    """风场图：风速填色 + 风向箭头（取风速最大时刻）。
+    """风场图：风速填色 + 风向箭头（自动取整个过程风速最强的时刻）。
 
-    兼容三种结构：
+    兼容结构：
       - 标准 ERA5：(valid_time, latitude, longitude) + u10/v10
-      - MATLAB 转存：u10 维度为 (u10_dim0, u10_dim1, u10_dim2) + 独立 lat/lon/time 变量
-      - 2526 output_4 内置：wind_x/wind_y (time, lat, lon)
+      - MATLAB 转存：u10 维度 (u10_dim0/1/2) + 独立 lat/lon/time 变量
+      - 模式风场：wind_x/wind_y
+    多文件（如 ERA5 逐日）时自动遍历，取全局最强时刻绘制。
     """
     import numpy as np
     import xarray as xr
@@ -289,114 +290,156 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    wind_path = None
-    wf = ctx.files.get("wind_files") or []
-    if wf:
-        wind_path = wf[0]
-    if not wind_path:
+    paths = [p for p in (ctx.files.get("wind_files") or []) if p]
+    if not paths:
         return []
-    try:
-        ds = xr.open_dataset(wind_path, decode_times=True)
-    except Exception:
-        return []
-    out = []
-    try:
-        uvar = "u10" if "u10" in ds.variables else ("wind_x" if "wind_x" in ds.variables else None)
-        vvar = "v10" if "v10" in ds.variables else ("wind_y" if "wind_y" in ds.variables else None)
-        if uvar is None or vvar is None:
-            return []
-        u = ds[uvar]
-        v = ds[vvar]
 
-        # --- 识别时间维 ---
-        tdim = None
-        for d in u.dims:
-            if d in ("valid_time", "time") or d.startswith("time"):
-                tdim = d
-                break
+    # 关注海域（默认台湾海峡/厦门周边）：优先取"该海域风速最强时刻"，
+    # 台风靠近时中心在图内更完整、也更贴合业务关注区。
+    FOCUS = (117.0, 123.0, 21.0, 26.5)  # lon_min, lon_max, lat_min, lat_max
 
-        # --- 识别经纬度 ---
-        latv = lonv = None
-        for cand in ("latitude", "lat"):
-            if cand in ds.variables:
-                latv = np.asarray(ds[cand].values).ravel()
-                break
-        for cand in ("longitude", "lon"):
-            if cand in ds.variables:
-                lonv = np.asarray(ds[cand].values).ravel()
-                break
-        if latv is None or lonv is None:
-            return []
+    best = None  # 关注海域最强时刻
+    best_global = None  # 全域最强（兜底）
+    for path in paths[:10]:
+        ds = None
+        try:
+            ds = xr.open_dataset(path, decode_times=True)
+            uvar = "u10" if "u10" in ds.variables else ("wind_x" if "wind_x" in ds.variables else None)
+            vvar = "v10" if "v10" in ds.variables else ("wind_y" if "wind_y" in ds.variables else None)
+            if not uvar or not vvar:
+                continue
+            latv = lonv = None
+            for cand in ("latitude", "lat"):
+                if cand in ds.variables:
+                    latv = np.asarray(ds[cand].values).ravel()
+                    break
+            for cand in ("longitude", "lon"):
+                if cand in ds.variables:
+                    lonv = np.asarray(ds[cand].values).ravel()
+                    break
+            if latv is None or lonv is None:
+                continue
+            nlat, nlon = len(latv), len(lonv)
+            uarr = np.asarray(ds[uvar].values, dtype=float)
+            varr = np.asarray(ds[vvar].values, dtype=float)
+            shape = uarr.shape
 
-        # --- 取风速最大时刻 + 对齐为 (lat, lon) ---
-        nlat, nlon = len(latv), len(lonv)
-        # 找各轴：哪个轴等于 nlat / nlon，剩下的当作时间轴
-        shape = u.shape
-        ax_lat = next((i for i, s in enumerate(shape) if s == nlat), None)
-        ax_lon = next((i for i, s in enumerate(shape) if s == nlon), None)
-        uarr = np.asarray(u.values, dtype=float)
-        varr = np.asarray(v.values, dtype=float)
-
-        if ax_lat is not None and ax_lon is not None and len(shape) == 3:
-            ax_t = next((i for i in range(3) if i not in (ax_lat, ax_lon)), None)
-            # 取风速最大时刻
-            if ax_t is not None:
+            if len(shape) == 3:
+                ax_lat = next((i for i, s in enumerate(shape) if s == nlat), None)
+                ax_lon = next((i for i, s in enumerate(shape) if s == nlon), None)
+                if ax_lat is None or ax_lon is None:
+                    continue
+                ax_t = next((i for i in range(3) if i not in (ax_lat, ax_lon)), None)
+                if ax_t is None:
+                    continue
                 spd_all = np.sqrt(uarr ** 2 + varr ** 2)
-                # 沿 lat/lon 轴取最大 -> 逐时刻序列
-                k = int(np.nanargmax(np.nanmax(spd_all, axis=(ax_lat, ax_lon))))
-                sl = [slice(None)] * 3
-                sl[ax_t] = k
-                uu = uarr[tuple(sl)]
-                vv = varr[tuple(sl)]
-                try:
-                    tv = np.asarray(ds["time"].values).ravel()
-                    tlabel = str(tv[k])[:16].replace("T", " ")
-                except Exception:
-                    tlabel = f"第{k}时次"
-            else:
-                uu, vv = uarr[:, :, 0], varr[:, :, 0]
+                # 关注海域掩膜（通用：按轴位置放置 lat/lon 范围）
+                lat_ok = (latv >= FOCUS[2]) & (latv <= FOCUS[3])
+                lon_ok = (lonv >= FOCUS[0]) & (lonv <= FOCUS[1])
+                shp_lat = [1, 1, 1]
+                shp_lat[ax_lat] = nlat
+                shp_lon = [1, 1, 1]
+                shp_lon[ax_lon] = nlon
+                mask3 = np.ones(shape, dtype=bool)
+                mask3 = mask3 & lat_ok.reshape(shp_lat)
+                mask3 = mask3 & lon_ok.reshape(shp_lon)
+                spd_masked = np.where(mask3, spd_all, np.nan)
+                ts = np.nanmax(spd_masked, axis=(ax_lat, ax_lon))  # 逐时刻(关注海域)
+                k_focus = None
+                m_focus = -1.0
+                if np.any(np.isfinite(ts)):
+                    k_focus = int(np.nanargmax(ts))
+                    m_focus = float(np.nanmax(ts))
+                # 全域最强
+                k_all = int(np.nanargmax(np.nanmax(spd_all, axis=(ax_lat, ax_lon))))
+                m_all = float(np.nanmax(spd_all))
+
+                def _extract(k):
+                    sl = [slice(None)] * 3
+                    sl[ax_t] = k
+                    uu_ = uarr[tuple(sl)]
+                    vv_ = varr[tuple(sl)]
+                    remaining = [i for i in range(3) if i != ax_t]
+                    if remaining != [ax_lat, ax_lon]:
+                        uu_ = uu_.T
+                        vv_ = vv_.T
+                    return uu_, vv_
+
                 tlabel = ""
-            # 转成 (lat, lon)
-            if (ax_lat, ax_lon) == (0, 1):
-                pass
+                for tname in ("valid_time", "time"):
+                    if tname in ds.variables:
+                        try:
+                            tv = np.asarray(ds[tname].values).ravel()
+                            tlabel_all = str(tv[k_all])[:16].replace("T", " ")
+                            tlabel_focus = str(tv[k_focus])[:16].replace("T", " ") if k_focus is not None else ""
+                        except Exception:
+                            tlabel_all = tlabel_focus = ""
+                        break
+                else:
+                    tlabel_all = tlabel_focus = ""
+
+                # 关注海域优先
+                if k_focus is not None and m_focus > 0:
+                    uu_, vv_ = _extract(k_focus)
+                    if uu_.shape == (nlat, nlon) and (best is None or m_focus > best["score"]):
+                        best = {"score": m_focus, "max_spd": float(np.nanmax(np.sqrt(uu_ ** 2 + vv_ ** 2))),
+                                "uu": uu_, "vv": vv_, "latv": latv, "lonv": lonv,
+                                "tlabel": tlabel_focus, "src": path}
+                # 全域兜底
+                uu_, vv_ = _extract(k_all)
+                if uu_.shape == (nlat, nlon) and (best_global is None or m_all > best_global["score"]):
+                    best_global = {"score": m_all, "max_spd": float(np.nanmax(np.sqrt(uu_ ** 2 + vv_ ** 2))),
+                                   "uu": uu_, "vv": vv_, "latv": latv, "lonv": lonv,
+                                   "tlabel": tlabel_all, "src": path}
+            elif len(shape) == 2:
+                uu, vv = uarr, varr
+                if uu.shape == (nlon, nlat):
+                    uu, vv = uu.T, vv.T
+                if uu.shape == (nlat, nlon):
+                    m = float(np.nanmax(np.sqrt(uu ** 2 + vv ** 2)))
+                    if best_global is None or m > best_global["score"]:
+                        best_global = {"score": m, "max_spd": m, "uu": uu, "vv": vv,
+                                       "latv": latv, "lonv": lonv, "tlabel": "", "src": path}
             else:
-                uu = uu.T
-                vv = vv.T
-        elif len(shape) == 2:
-            uu, vv = uarr, varr
-            if uu.shape == (nlon, nlat):
-                uu, vv = uu.T, vv.T
-            tlabel = ""
-        else:
-            return []
+                continue
+        except Exception:
+            continue
+        finally:
+            if ds is not None:
+                try:
+                    ds.close()
+                except Exception:
+                    pass
 
-        if uu.shape != (nlat, nlon):
-            return []
+    best = best or best_global
+    if best is None:
+        return []
 
-        spd = np.sqrt(uu ** 2 + vv ** 2)
-        LON, LAT = np.meshgrid(lonv, latv)
-        rgn = ctx.request.get("region", "") or ""
-        typh = str(ctx.request.get("typhoon", "") or "")
+    uu, vv = best["uu"], best["vv"]
+    latv, lonv = best["latv"], best["lonv"]
+    spd = np.sqrt(uu ** 2 + vv ** 2)
+    LON, LAT = np.meshgrid(lonv, latv)
+    typh = str(ctx.request.get("typhoon", "") or "")
+    tlabel = best["tlabel"]
 
-        fig, ax = plt.subplots(figsize=(7.4, 4.4), dpi=110)
-        pc = ax.pcolormesh(LON, LAT, spd, cmap="YlOrRd", shading="auto")
-        cb = fig.colorbar(pc, ax=ax, shrink=0.9)
-        cb.set_label("风速 (m/s)", fontsize=8)
-        step = max(1, LON.shape[0] // 16)
-        ax.quiver(LON[::step, ::step], LAT[::step, ::step],
-                  uu[::step, ::step], vv[::step, ::step],
-                  color="k", width=0.0025, scale=350, alpha=0.85)
-        ax.set_title(f"{typh}台风 风场{tlabel and '（' + tlabel + '）'} 最大风速 {np.nanmax(spd):.1f} m/s", fontsize=11)
-        ax.set_xlabel("经度", fontsize=9)
-        ax.set_ylabel("纬度", fontsize=9)
-        ax.tick_params(labelsize=8)
-        fig.tight_layout(pad=1.0)
-        fp = OUT_DIR / f"wind_field_{tag}.png"
-        fig.savefig(fp, bbox_inches="tight")
-        plt.close(fig)
-        out.append(str(fp))
-    except Exception:
-        pass
-    finally:
-        ds.close()
-    return out
+    fig, ax = plt.subplots(figsize=(7.4, 4.4), dpi=110)
+    pc = ax.pcolormesh(LON, LAT, spd, cmap="YlOrRd", shading="auto")
+    cb = fig.colorbar(pc, ax=ax, shrink=0.9)
+    cb.set_label("风速 (m/s)", fontsize=8)
+    step = max(1, LON.shape[0] // 16)
+    ax.quiver(LON[::step, ::step], LAT[::step, ::step],
+              uu[::step, ::step], vv[::step, ::step],
+              color="k", width=0.0025, scale=350, alpha=0.85)
+    title = f"{typh}台风 风场" if typh else "风场"
+    if tlabel:
+        title += f"（{tlabel}）"
+    title += f" 最大风速 {best['max_spd']:.1f} m/s"
+    ax.set_title(title, fontsize=11)
+    ax.set_xlabel("经度", fontsize=9)
+    ax.set_ylabel("纬度", fontsize=9)
+    ax.tick_params(labelsize=8)
+    fig.tight_layout(pad=1.0)
+    fp = OUT_DIR / f"wind_field_{tag}.png"
+    fig.savefig(fp, bbox_inches="tight")
+    plt.close(fig)
+    return [str(fp)]

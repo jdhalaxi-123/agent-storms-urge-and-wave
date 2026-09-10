@@ -21,21 +21,31 @@ SYSTEM_PROMPT = (
     "对风暴潮、海浪、海洋预报相关的常识或知识问题，直接清晰回答；"
     "当用户需要查询某个海域的具体预报风险（海水倒灌、增水、浪高、预警等级等）时，"
     "调用 forecast_risk 工具获取结果，再把结果整理成简洁易懂的回复。"
+    "【画图】当用户要求“画/看/展示”某台风的风场图、增水曲线、全场分布图、海浪图时，"
+    "同样调用 forecast_risk 工具（填好 typhoon 与 region），它会生成图片并在对话中显示。"
     "当用户询问数据库/数据位置（如“XX数据在哪”“FTP上有什么”“有没有XX台风的YY数据”）时，"
     "调用 ftp_query 工具查询课题数据库，并把查到的路径/目录内容清楚告诉用户；"
     "只报告工具实际返回的路径，不要推测不存在的路径。"
     "当用户明确要求下载/同步某数据时，调用 ftp_sync 工具同步到本地，并告知同步了多少文件/多大。"
+    "注意区分：问“数据在哪/有什么”→ ftp_query；问“预报结论/画图/看风场”→ forecast_risk。"
+    "【重要】生成的图片会自动附加到对话中显示，回复里不要再用 markdown 图片语法"
+    "（如 ![](...)）或写出本地文件路径，只需简要说明图的内容即可。"
 )
 
 FORECAST_TOOL = {
     "type": "function",
     "function": {
         "name": "forecast_risk",
-        "description": "查询指定海域的风暴潮或海浪预报风险，返回预警等级、风险结论与简报",
+        "description": (
+            "查询指定海域的风暴潮或海浪预报风险，并生成预报图"
+            "（站点增水/水位过程曲线、全场增水分布、风场图、海浪波高曲线）。"
+            "返回预警等级、风险结论与简报。"
+            "用户要求“画图/看风场/看预报图”时也调用本工具。"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "region": {"type": "string", "description": "海域或地名，如：厦门、浙江沿海"},
+                "region": {"type": "string", "description": "海域或地名，如：厦门、浙江沿海；缺省为厦门"},
                 "disaster": {
                     "type": "string",
                     "enum": ["storm_surge", "wave"],
@@ -46,7 +56,7 @@ FORECAST_TOOL = {
                 "typhoon": {"type": "string", "description": "台风编号（可省略），如：2526、2403、1521、1614；用户未指定台风时省略"},
                 "date": {"type": "string", "description": "查看日期（可省略），如：7月22日、2024-07-22；用户指定具体日期时填写，否则省略"},
             },
-            "required": ["region", "disaster"],
+            "required": ["disaster"],
         },
     },
 }
@@ -155,9 +165,9 @@ def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
     from . import engine  # 延迟导入，避免循环依赖
 
     slots = {
-        "disaster": args.get("disaster", "unknown"),
+        "disaster": args.get("disaster", "storm_surge"),
         "risk_type": args.get("risk_type", "general"),
-        "region": args.get("region", "未知海域"),
+        "region": args.get("region") or "厦门",
         "time_window": args.get("time_window", "未指定"),
         "typhoon": args.get("typhoon", ""),
         "date": args.get("date", ""),
