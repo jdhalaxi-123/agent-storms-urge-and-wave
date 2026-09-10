@@ -31,6 +31,8 @@ SYSTEM_PROMPT = (
     "只报告工具实际返回的路径，不要推测不存在的路径。"
     "当用户明确要求下载/同步某数据时，调用 ftp_sync 工具同步到本地，并告知同步了多少文件/多大。"
     "注意区分：问“数据在哪/有什么”→ ftp_query；问“预报结论/画图/看风场”→ forecast_risk。"
+    "【覆盖范围】若 forecast_risk 返回“不在覆盖范围”的说明（如上海、青岛等），"
+    "直接如实转达该说明，**绝不可自行编造该海域的任何数据或结论**。"
     "【重要】生成的图片会自动附加到对话中显示，回复里不要再用 markdown 图片语法"
     "（如 ![](...)）或写出本地文件路径，只需简要说明图的内容即可。"
 )
@@ -58,6 +60,8 @@ FORECAST_TOOL = {
                 "risk_type": {"type": "string", "description": "风险类型，如：海水倒灌、增水、浪高"},
                 "typhoon": {"type": "string", "description": "台风编号（可省略），如：2526、2403、1521、1614；用户未指定台风时省略"},
                 "date": {"type": "string", "description": "查看日期（可省略），如：7月22日、2024-07-22；用户指定具体日期时填写，否则省略"},
+                "lon": {"type": "number", "description": "任意点经度（可省略，与lat配对），如 118.5；用户给出经纬度坐标时填写"},
+                "lat": {"type": "number", "description": "任意点纬度（可省略，与lon配对），如 24.3；用户给出经纬度坐标时填写"},
                 "plot": {
                     "type": "string",
                     "enum": ["wind", "surge_station", "surge_field", "wave", "all"],
@@ -185,6 +189,8 @@ def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
         "typhoon": args.get("typhoon", ""),
         "date": args.get("date", ""),
         "plot": args.get("plot", ""),
+        "lon": args.get("lon"),
+        "lat": args.get("lat"),
         "raw": "llm",
     }
     result = engine.run_with_slots(slots, raw=json.dumps(args, ensure_ascii=False))

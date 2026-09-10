@@ -13,7 +13,7 @@ from typing import Any, Dict
 import modules  # 顶层业务模块包
 
 from .contract import ModuleContext
-from . import intent, router, memory
+from . import intent, router, memory, geo_domain
 
 
 def run(request: str) -> Dict[str, Any]:
@@ -24,6 +24,25 @@ def run(request: str) -> Dict[str, Any]:
 
 def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     """槽位入口：LLM 工具调用直接给结构化参数。"""
+    # 覆盖范围校验：超出范围不展示任何数据，只返回文字说明
+    region = slots.get("region", "")
+    chk = geo_domain.check_region(region, slots.get("lon"), slots.get("lat"))
+    if not chk.get("ok"):
+        msg = chk.get("message", "")
+        memory.append({
+            "request": raw or slots.get("raw", ""),
+            "slots": slots,
+            "out_of_domain": chk.get("matched"),
+        })
+        return {
+            "reply": msg,
+            "images": [],
+            "docx_path": None,
+            "brief_template": "out_of_domain",
+            "out_of_domain": chk.get("matched"),
+            "meta": {"status": "out_of_domain", "matched": chk.get("matched")},
+        }
+
     # 场景路由：槽位 → 命中的模块实现标识
     routes = router.resolve(slots)
 
