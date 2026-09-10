@@ -204,11 +204,144 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
     return str(path)
 
 
-def _draw_field_map(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
-    """全场增水空间分布图：output_0(数值) + output_4(AI/融合) 过程最大增水对比。
+def _draw_mesh_surge_map(OUT_DIR: Path, ctx: ModuleContext, path: str, tag: str) -> str:
+    """非结构三角网格数据的"过程最大增水"全场分布图（FTP/Ensemble 数据）。
 
-    从 ctx.files['surge_files'] 找 output_0/output_4；数据大，仅取时间最大
-    降低内存；无数据或缺变量时返回空。
+    - 增水 = elev_surge（若有）或 elev_all - elev_tide
+    - 用 tri 三角连通 + tripcolor 绘制；分块读取时间维以控制内存
+    - 指定日期时只统计该日期内的最大增水
+    """
+    import numpy as np
+    import xarray as xr
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    try:
+        ds = xr.open_dataset(path, decode_times=True)
+    except Exception:
+        return ""
+
+    try:
+        if "lon" not in ds.variables or "lat" not in ds.variables or "tri" not in ds.variables:
+            return ""
+        lon = np.asarray(ds["lon"].values).ravel()
+        lat = np.asarray(ds["lat"].values).ravel()
+        tri = np.asarray(ds["tri"].values, dtype=int)
+        if tri.ndim != 2 or tri.shape[1] != 3:
+            return ""
+        tri = tri - 1  # 1-based -> 0-based
+
+        # 时间维名
+        tname = None
+        for cand in ("time", "valid_time"):
+            if cand in ds.variables:
+                tname = cand
+                break
+        if tname is None:
+            return ""
+        times = np.asarray(ds[tname].values).ravel()
+        n_t = len(times)
+
+        # 时间索引（可被日期过滤）
+        idx = np.arange(n_t)
+        target_date = _req_date(ctx)
+        if target_date is not None:
+            dates = _times_to_dates(times, path)
+            if dates is not None:
+                td = target_date
+                if getattr(td, "year", 2000) == 2000:
+                    try:
+                        td = td.replace(year=int(str(dates[0])[:4]))
+                    except Exception:
+                        pass
+                sel = (dates == np.datetime64(td))
+                if not sel.any():
+                    return ""
+                idx = np.where(sel)[0]
+
+        # 增水来源
+        has_surge = "elev_surge" in ds.variables
+        has_all = "elev_all" in ds.variables
+        has_tide = "elev_tide" in ds.variables
+        if not has_surge and not (has_all and has_tide):
+            return ""
+
+        # 分块计算逐节点时间最大值
+        best = None
+        chunk = 48
+        for s in range(0, len(idx), chunk):
+            block_idx = idx[s:s + chunk]
+            if has_surge:
+                block = np.asarray(ds["elev_surge"].values[:, block_idx], dtype=float)
+            else:
+                block = (np.asarray(ds["elev_all"].values[:, block_idx], dtype=float)
+                         - np.asarray(ds["elev_tide"].values[:, block_idx], dtype=float))
+            m = np.nanmax(block, axis=1)
+            best = m if best is None else np.maximum(best, m)
+        if best is None:
+            return ""
+        # m -> cm
+        field = best * 100.0
+
+        # 陆地掩膜：depth<=0 的节点（陆地/干出）数值不可信，置 NaN
+        if "depth" in ds.variables:
+            depth = np.asarray(ds["depth"].values).ravel()
+            if len(depth) == field.size:
+                field = np.where(depth > 0, field, np.nan)
+
+        typh = str(ctx.request.get("typhoon", "") or "")
+        date_txt = ""
+        if target_date is not None:
+            try:
+                date_txt = f" {np.datetime64(target_date)}"[:11]
+            except Exception:
+                date_txt = ""
+
+        import matplotlib.tri as mtri
+        triang = mtri.Triangulation(lon, lat, tri)
+        finite = field[np.isfinite(field)]
+        if finite.size == 0:
+            return ""
+        # 稳健色标：取 99 分位，避免个别异常节点拉爆色标
+        vmax = float(np.nanpercentile(finite, 99))
+        vmax = max(vmax, 50.0)
+        peak = float(np.nanmax(finite))
+
+        fig, ax = plt.subplots(figsize=(7.4, 4.6), dpi=110)
+        tp = ax.tripcolor(triang, field, shading="gouraud", cmap="YlOrRd", vmin=0, vmax=vmax)
+        cb = fig.colorbar(tp, ax=ax, shrink=0.9)
+        cb.set_label("过程最大增水 (cm)", fontsize=8)
+        ax.set_xlim(114.5, 127.5)
+        ax.set_ylim(17.0, 29.5)
+        title = f"{typh}台风 全场最大风暴增水分布" if typh else "全场最大风暴增水分布"
+        if date_txt:
+            title += f"（{date_txt}）"
+        title += f"  区域峰值约 {vmax:.0f} cm"
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel("经度", fontsize=9)
+        ax.set_ylabel("纬度", fontsize=9)
+        ax.tick_params(labelsize=8)
+        fig.tight_layout(pad=1.0)
+        fp = OUT_DIR / f"field_mesh_{tag}.png"
+        fig.savefig(fp, bbox_inches="tight")
+        plt.close(fig)
+        return str(fp)
+    except Exception:
+        return ""
+    finally:
+        try:
+            ds.close()
+        except Exception:
+            pass
+
+
+def _draw_field_map(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
+    """全场增水空间分布图。
+
+    A) 结构化网格（2526 的 output_0 数值 + output_4 AI/融合）→ 对比图组
+    B) 非结构三角网格（FTP/Ensemble 的 *.nc：elev_all/elev_tide/elev_surge + tri）
+       → 过程最大增水分布（tripcolor）
     """
     import numpy as np
     import xarray as xr
@@ -216,8 +349,15 @@ def _draw_field_map(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
     paths = ctx.files.get("surge_files") or []
     num_p = next((p for p in paths if "output_0" in p), None)
     ai_p = next((p for p in paths if "output_4" in p), None)
+
+    # ---- B) 非结构网格兜底 ----
     if not (num_p or ai_p):
-        return []
+        mesh_imgs = []
+        for p in paths[:2]:
+            img = _draw_mesh_surge_map(OUT_DIR, ctx, p, tag)
+            if img:
+                mesh_imgs.append(img)
+        return mesh_imgs
 
     out_imgs = []
     import matplotlib.pyplot as plt
