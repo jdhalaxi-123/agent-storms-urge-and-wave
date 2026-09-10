@@ -49,12 +49,20 @@ KNOWN_PLACES = {
     "三沙": (120.20, 26.90),
     "温州": (120.70, 28.00),
     "台州": (121.45, 28.65),
-    "台湾海峡": (119.00, 24.00),
     "台湾海峡北部": (120.00, 25.00),
     "台湾海峡南部": (118.50, 23.00),
     "澎湖": (119.57, 23.57),
     "金门": (118.32, 24.44),
     "马祖": (119.95, 26.15),
+    "基隆": (121.75, 25.15),
+    "台北": (121.50, 25.05),
+    "新竹": (120.95, 24.80),
+    "台中": (120.65, 24.15),
+    "台南": (120.20, 23.00),
+    "高雄": (120.30, 22.60),
+    "花莲": (121.60, 23.98),
+    "台东": (121.15, 22.75),
+    "垦丁": (120.80, 21.95),
     # ===== 覆盖区外（用于明确拒绝）=====
     "上海": (121.50, 31.23),
     "长江口": (121.90, 31.40),
@@ -94,17 +102,60 @@ def _norm(s: str) -> str:
     return str(s or "").strip().replace(" ", "").replace("附近", "").replace("海域", "").replace("沿海", "").replace("站", "")
 
 
+# 范围过大、需要追问具体位置的区域（避免笼统给结论）
+BROAD_REGIONS = {
+    "台湾": "台湾海峡北部、台湾海峡南部、澎湖、金门、马祖，或基隆/台北/台中/台南/高雄/花莲等城市近海",
+    "台湾省": "台湾海峡北部、台湾海峡南部、澎湖、金门、马祖，或各城市近海",
+    "台湾岛": "台湾海峡北部、台湾海峡南部、澎湖、金门、马祖",
+    "台湾地区": "台湾海峡北部、台湾海峡南部、澎湖、金门、马祖",
+    "台湾沿海": "台湾海峡北部、台湾海峡南部、澎湖、金门、马祖",
+    "台湾周边": "台湾海峡北部、台湾海峡南部、澎湖、金门、马祖",
+    "台湾海峡": "台湾海峡北部、台湾海峡南部",
+    "福建": "厦门、崇武、晋江、东山、福州、莆田、泉州、漳州",
+    "福建省": "厦门、崇武、晋江、东山、福州、莆田、泉州、漳州",
+    "浙江": "温州、台州（浙南沿海）",
+    "浙江沿海": "温州、台州（浙南沿海）",
+    "广东": "汕头（粤东沿海，覆盖区边缘）",
+    "广东沿海": "汕头（粤东沿海，覆盖区边缘）",
+    "中国沿海": "厦门、崇武、晋江、东山",
+    "全国沿海": "厦门、崇武、晋江、东山",
+    "东南沿海": "厦门、崇武、晋江、东山",
+    "华东沿海": "厦门、崇武、晋江、东山、温州、台州",
+    "华南沿海": "厦门、崇武、晋江、东山、汕头",
+    "近海": "厦门、崇武、晋江、东山",
+    "沿岸": "厦门、崇武、晋江、东山",
+    "沿海地区": "厦门、崇武、晋江、东山",
+    "闽南": "厦门、晋江、东山、漳州",
+    "闽南沿海": "厦门、晋江、东山、漳州",
+    "闽东": "福州、宁德、平潭",
+    "南海": "（不在本系统覆盖范围内）",
+    "东海": "温州、台州（浙南）",
+}
+
+
+def _match_broad(region: str) -> Optional[str]:
+    """匹配大范围区域名（最长优先）。"""
+    r = str(region or "")
+    if not r:
+        return None
+    for name in sorted(BROAD_REGIONS.keys(), key=len, reverse=True):
+        if name and name in r:
+            return name
+    return None
+
+
 def locate(region: str) -> Tuple[Optional[str], Optional[tuple]]:
-    """在字典中匹配地点名（最长匹配优先）。
+    """在字典中匹配地点名（最长匹配优先，大小写不敏感）。
 
     返回 (匹配到的地点名, 坐标) 或 (None, None)。
     """
     r = str(region or "")
     if not r:
         return None, None
+    rl = r.lower()
     # 最长名称优先，避免"台湾海峡北部"被"台湾海峡"抢先
     for name in sorted(KNOWN_PLACES.keys(), key=len, reverse=True):
-        if name and name in r:
+        if name and (name in r or name.lower() in rl):
             return name, KNOWN_PLACES[name]
     # 归一化后再试
     r2 = _norm(r)
@@ -119,11 +170,12 @@ def in_domain(lon: float, lat: float) -> bool:
 
 
 def check_region(region: str, lon=None, lat=None) -> dict:
-    """检查请求地点是否在覆盖区内。
+    """检查请求地点是否在覆盖区内 / 是否需要追问。
 
     返回：
         {"ok": True,  "matched": 地点名或None, "coord": (lon,lat)或None}
-        {"ok": False, "matched": 地点名, "coord": (lon,lat), "message": 拒绝说明}
+        {"ok": False, "reason": "out_of_domain", "matched": 地点名, "message": 拒绝说明}
+        {"ok": False, "reason": "need_clarify", "matched": 大范围名, "message": 追问说明}
     """
     # 1) 若直接给了经纬度，按坐标判定
     if lon is not None and lat is not None:
@@ -132,6 +184,7 @@ def check_region(region: str, lon=None, lat=None) -> dict:
             if not in_domain(lo, la):
                 return {
                     "ok": False,
+                    "reason": "out_of_domain",
                     "matched": f"({lo:.2f}°E, {la:.2f}°N)",
                     "coord": (lo, la),
                     "message": _refuse_msg(f"坐标 ({lo:.2f}°E, {la:.2f}°N)"),
@@ -140,11 +193,27 @@ def check_region(region: str, lon=None, lat=None) -> dict:
         except (TypeError, ValueError):
             pass
 
-    # 2) 按地点名判定
+    # 2) 按具体地点名判定
     name, coord = locate(region)
-    if name and coord and not in_domain(*coord):
-        return {"ok": False, "matched": name, "coord": coord, "message": _refuse_msg(name)}
-    return {"ok": True, "matched": name, "coord": coord}
+    if name and coord:
+        if not in_domain(*coord):
+            return {"ok": False, "reason": "out_of_domain", "matched": name,
+                    "coord": coord, "message": _refuse_msg(name)}
+        return {"ok": True, "matched": name, "coord": coord}
+
+    # 3) 大范围区域 → 追问具体位置
+    broad = _match_broad(region)
+    if broad:
+        return {"ok": False, "reason": "need_clarify", "matched": broad,
+                "message": _clarify_msg(broad)}
+
+    # 4) 无法识别的地点 → 也追问（避免给错区域的数据）
+    r = str(region or "").strip()
+    if r and r not in ("未知海域", "未指定", "未知", "全部", "全程"):
+        return {"ok": False, "reason": "need_clarify", "matched": r,
+                "message": _clarify_unknown_msg(r)}
+
+    return {"ok": True, "matched": None, "coord": None}
 
 
 def _refuse_msg(place: str) -> str:
@@ -153,4 +222,27 @@ def _refuse_msg(place: str) -> str:
         f"**覆盖范围**：{DOMAIN_DESC}\n"
         f"**当前可查询的站点**：{SUPPORTED_STATIONS}\n\n"
         f"如需其他海域的预报，请提供覆盖范围内的位置。"
+    )
+
+
+def _clarify_msg(broad: str) -> str:
+    tips = BROAD_REGIONS.get(broad, "")
+    lines = [
+        f"「{broad}」涉及范围较大，为避免给出笼统结论，请具体说明您关注的位置。",
+        "",
+        f"**可选位置**：{tips}",
+        "",
+        f"也可以直接给出经纬度（如 120.5°E, 24.5°N）。",
+        f"**当前支持查询的站点**：{SUPPORTED_STATIONS}",
+        f"**覆盖范围**：{DOMAIN_DESC}",
+    ]
+    return "\n".join(lines)
+
+
+def _clarify_unknown_msg(name: str) -> str:
+    return (
+        f"暂时无法确定「{name}」的具体位置，请提供更明确的地点名称或经纬度，"
+        f"以便给出对应海域的预报结论。\n\n"
+        f"**当前支持查询的站点**：{SUPPORTED_STATIONS}\n"
+        f"**覆盖范围**：{DOMAIN_DESC}"
     )

@@ -29,18 +29,20 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     chk = geo_domain.check_region(region, slots.get("lon"), slots.get("lat"))
     if not chk.get("ok"):
         msg = chk.get("message", "")
+        reason = chk.get("reason", "out_of_domain")
         memory.append({
             "request": raw or slots.get("raw", ""),
             "slots": slots,
-            "out_of_domain": chk.get("matched"),
+            reason: chk.get("matched"),
         })
         return {
             "reply": msg,
             "images": [],
             "docx_path": None,
-            "brief_template": "out_of_domain",
-            "out_of_domain": chk.get("matched"),
-            "meta": {"status": "out_of_domain", "matched": chk.get("matched")},
+            "brief_template": reason,
+            "need_clarify": reason == "need_clarify",
+            "out_of_domain": chk.get("matched") if reason == "out_of_domain" else None,
+            "meta": {"status": reason, "matched": chk.get("matched")},
         }
 
     # 场景路由：槽位 → 命中的模块实现标识
