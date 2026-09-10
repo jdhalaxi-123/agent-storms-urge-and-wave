@@ -128,8 +128,11 @@ def run(ctx: ModuleContext) -> ModuleContext:
         if wf:
             ctx.files["wave_files"] = [wf["path"]]
 
-    # 非 Ensemble 场预报（2526 的 output_0/4）
+    # 非 Ensemble 场预报（2526 的 output_0/4）——只认当前台风目录下的文件，
+    # 避免把 data/sample 等同名样例文件当成真实数据
     for f in by_kind["surge"]:
+        if target not in f["rel"].replace("\\", "/"):
+            continue
         if f["name"] == "output_0.nc":
             ctx.files["nc_forecast_num"] = ctx.files.get("nc_forecast_num") or f["path"]
         elif f["name"] == "output_4.nc":

@@ -107,7 +107,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
         return ctx
 
     max_cm = geo.get("max_surge_cm", 0.0)
-    is_total_level = (src == "ensemble")  # Ensemble 数据自带天文潮, max 为总水位
+    is_point = bool(geo.get("custom_point"))
+    # Ensemble 数据自带天文潮, max 为总水位；但任意采样点没有本站警戒潮位，
+    # 只能按"风暴增水"分级判级，故此时不按总水位判。
+    is_total_level = (src == "ensemble") and not is_point
     peak_site = geo.get("peak_site", "厦门港")
     peak_time = geo.get("peak_time", "")
 
@@ -126,6 +129,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
             basis = f"过程最大增水 {max_cm:.1f}cm，未达蓝色阈值(30cm)"
         else:
             basis = f"过程最大增水 {max_cm:.1f}cm(位于{peak_site})，达到{level}预警阈值"
+        if is_point and geo.get("max_all_cm"):
+            basis += f"；该点过程最高水位 {geo['max_all_cm']:.1f}cm（参照）"
 
     # 站点表（简报的潮位×警戒潮位对照表，用各站真实警戒潮位）
     stations = []
@@ -134,11 +139,18 @@ def run(ctx: ModuleContext) -> ModuleContext:
         sname = s.get("name", "")
         key = STATION_NAME_MAP.get(sname, sname)
         warn = STATION_WARN_LEVELS.get(key) or STATION_WARN_LEVELS.get(sname)
+        if is_point and not warn:
+            warn = None
         # Ensemble(总水位) -> 对照该站警戒潮位判级; 否则增水阈值
         lv = judge_by_warn_level(cm, warn) if (is_total_level and warn) else judge(cm)
         pt = s.get("peak_time", "")
         pd = s.get("peak_date", "")
-        warn_text = warn["color"] + "(蓝/黄/橙/红)" if warn else "700(蓝)/720(黄)/740(橙)/760(红)"
+        if warn:
+            warn_text = warn["color"] + "(蓝/黄/橙/红)"
+        elif is_point:
+            warn_text = f"30/50/80/120(增水分级)"
+        else:
+            warn_text = "700(蓝)/720(黄)/740(橙)/760(红)"
         stations.append({
             "station": sname,
             "date": pd,
@@ -152,6 +164,31 @@ def run(ctx: ModuleContext) -> ModuleContext:
     region = ctx.request.get("region", "未指定海域")
     tw = ctx.request.get("time_window", "")
     tw_text = ""  # 不再写"未来N天窗口"(避免误导); 实际范围由 data_range 标注
+
+    # 任意采样点：补充点位/网格点/距离说明
+    point_note = ""
+    point_desc = ""
+    if is_point:
+        pname = geo.get("point_name") or region
+        plo, pla = geo.get("point_lon"), geo.get("point_lat")
+        slo, sla = geo.get("sample_lon"), geo.get("sample_lat")
+        dist = geo.get("sample_dist_km")
+        kind = geo.get("sample_kind", "")
+        where = {"mesh": "风暴潮数值模式场（非结构网格）",
+                 "grid": "风暴潮数值模式场（网格）",
+                 "nearest_station": "本站站点数据"}.get(kind, "模式场")
+        point_desc = f"{pname}（{plo}°E, {pla}°N）"
+        if kind == "nearest_station":
+            point_note = (
+                f"注：该台风暂无覆盖该点的场数据，此处采用最近本站站点"
+                f"「{geo.get('sample_station','')}」（距目标点约 {dist} km）的预报结果。"
+            )
+        else:
+            point_note = (
+                f"注：采样点为{pname}（{plo}°E, {pla}°N），"
+                f"取自{where}最近有效格点（{slo}°E, {sla}°N，距目标点约 {dist} km）。"
+            )
+
     brief_data = {
         "template_type": "storm_surge_alert",
         "agency": "自然资源部厦门海洋预报台",
@@ -172,8 +209,13 @@ def run(ctx: ModuleContext) -> ModuleContext:
         "tip": "预警提示：请沿海相关部门关闭危险区域的海滨浴场和休闲娱乐场所，加固薄弱危险区域的海堤等设施，做好防潮准备和应急措施。",
         "note": (
             "注：本简报预警级别判定标准——"
-            + ("「风暴潮总水位对照该站警戒潮位表（蓝/黄/橙/红）」；" if is_total_level else "「风暴增水分级」（蓝色30cm/黄色50cm/橙色80cm/红色120cm）；")
-            + "表中警戒潮位为该站85黄零基准的四色警戒值，最终判级以厦门中心业务化运行结果为准。"
+            + ("「风暴潮总水位对照该站警戒潮位表（蓝/黄/橙/红）」；" if is_total_level
+               else "「风暴增水分级」（蓝色30cm/黄色50cm/橙色80cm/红色120cm）；")
+            + ("该点为任意采样点，无本站四色警戒潮位，故按风暴增水分级判定。"
+               if is_point else
+               "表中警戒潮位为该站85黄零基准的四色警戒值。")
+            + "最终判级以厦门中心业务化运行结果为准。"
+            + (f"\n{point_note}" if point_note else "")
         ),
         "targets": "市委办、市政府办、市防汛办",
         "contact": "陶小琴",
@@ -190,6 +232,9 @@ def run(ctx: ModuleContext) -> ModuleContext:
         "max_surge_cm": max_cm,
         "peak_time": peak_time,
         "peak_site": peak_site,
+        "custom_point": is_point,
+        "point_desc": point_desc,
+        "point_note": point_note,
         "brief_data": brief_data,
     }
 
@@ -198,8 +243,9 @@ def run(ctx: ModuleContext) -> ModuleContext:
     if wave.get("status") == "ok":
         wl = wave.get("level", "无")
         wtext = "未达到预警阈值" if wl == "无" else f"{wl}预警"
+        w_region = geo.get("point_name") or region
         brief_data["summary"] += (
-            f"\n\n同时，受台风影响，厦门近岸海域将出现{wave.get('max_hs_m', 0):.1f}米的大浪过程，"
+            f"\n\n同时，受台风影响，{w_region}近岸海域将出现{wave.get('max_hs_m', 0):.1f}米的大浪过程，"
             f"海浪预警级别为{wtext}。"
         )
         ctx.results["assess"]["wave"] = {

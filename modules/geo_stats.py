@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import datetime
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -262,11 +262,96 @@ def _read_station_data(paths: List[str]) -> List[Dict[str, Any]]:
     return results
 
 
+def _mesh_index(ds) -> Dict[str, Any]:
+    """非结构三角网格索引信息。
+
+    - npts   节点数（lon/lat/depth 所在维度）
+    - nfaces 三角形数（tri 行数）
+    - lookup 节点 -> 相邻三角形 的查找表（用于读取"面中心"变量，如 Ensemble）
+    """
+    npts = int(np.asarray(ds["lon"].values).ravel().size)
+    nfaces = 0
+    lookup = None
+    if "tri" in ds.variables:
+        tri = np.asarray(ds["tri"].values)
+        if tri.ndim == 2 and tri.shape[1] == 3:
+            tri0 = tri.astype(np.int64) - 1          # 1-based -> 0-based
+            tri0 = np.clip(tri0, 0, npts - 1)
+            nfaces = int(tri0.shape[0])
+            node_of = tri0.ravel()
+            face_of = np.repeat(np.arange(nfaces), 3)
+            order = np.argsort(node_of, kind="stable")
+            lookup = (node_of[order], face_of[order])
+    return {"npts": npts, "nfaces": nfaces, "lookup": lookup}
+
+
+def _faces_of_node(idx: Dict[str, Any], k: int) -> Optional[np.ndarray]:
+    """节点 k 的相邻三角形编号。"""
+    lk = idx.get("lookup")
+    if lk is None:
+        return None
+    node_s, face_s = lk
+    lo = int(np.searchsorted(node_s, k, side="left"))
+    hi = int(np.searchsorted(node_s, k, side="right"))
+    if hi <= lo:
+        return None
+    return face_s[lo:hi]
+
+
+def _fill_gaps(arr: np.ndarray) -> np.ndarray:
+    """线性插值填补序列中的 NaN（首尾用最近有效值），避免曲线断点/标注为 nan。"""
+    a = np.asarray(arr, dtype=float).ravel()
+    if a.size == 0:
+        return a
+    good = np.isfinite(a)
+    if good.all():
+        return a
+    if not good.any():
+        return np.nan_to_num(a, nan=0.0)
+    idx = np.arange(a.size)
+    a = a.copy()
+    a[~good] = np.interp(idx[~good], idx[good], a[good])
+    return a
+
+
+def _mesh_series(ds, var: str, k: int, idx: Dict[str, Any]) -> np.ndarray:
+    """取非结构网格上节点 k 的时间序列（单位: m）。
+
+    自动识别三种排布（只按需切片，避免整场读入内存）：
+        (npts, time)   节点中心
+        (time, npts)   节点中心（转置）
+        (nfaces, time) 面中心 → 取该节点相邻面平均
+    """
+    if var not in ds.variables:
+        return np.asarray([])
+    a = ds[var]
+    if a.ndim == 1:
+        return np.asarray(a.values, dtype=float).ravel()
+    dims = a.dims
+    npts = idx["npts"]
+    if int(a.shape[0]) == npts:
+        return np.asarray(a.isel({dims[0]: int(k)}).values, dtype=float).ravel()
+    if int(a.shape[-1]) == npts:
+        return np.asarray(a.isel({dims[-1]: int(k)}).values, dtype=float).ravel()
+    if int(a.shape[0]) == idx["nfaces"]:
+        faces = _faces_of_node(idx, int(k))
+        if faces is None or faces.size == 0:
+            return np.asarray([])
+        sub = np.asarray(a.isel({dims[0]: faces}).values, dtype=float)
+        if sub.ndim == 1:
+            return sub.ravel()
+        with np.errstate(invalid="ignore"):
+            s = np.nanmean(sub, axis=0)
+        return _fill_gaps(np.asarray(s, dtype=float).ravel())
+    return np.asarray([])
+
+
 def _read_ensemble_sites(path: str) -> List[Dict[str, Any]]:
     """从 Ensemble 集合文件（非结构网格: lon/lat 节点 70775, tri 三角形）按最近节点采样站点。
 
     变量：elev_all(总水位) / elev_surge(增水) / elev_tide(天文潮)，单位 m；
     站点输出三量序列（cm）：series_all / series_surge / series_tide。
+    注意：Ensemble 文件的水位是"面中心"量（nfaces=133431），需按相邻面平均取节点值。
     """
     import xarray as xr
 
@@ -284,31 +369,30 @@ def _read_ensemble_sites(path: str) -> List[Dict[str, Any]]:
             return []
         lon = np.asarray(ds["lon"].values).ravel()
         lat = np.asarray(ds["lat"].values).ravel()
+        idx = _mesh_index(ds)
         time = ds["time"].values
         start_dt = pd_to_dt(time[0]) if len(time) else None
 
         sites = []
         for name, (lon_pt, lat_pt) in SITES.items():
             d2 = (lon - lon_pt) ** 2 + (lat - lat_pt) ** 2
-            idx = int(np.argmin(d2))
+            idx_n = int(np.argmin(d2))
             row = {
                 "name": name, "code": name.split("(")[-1].rstrip(")"),
-                "lon": float(lon[idx]), "lat": float(lat[idx]),
+                "lon": float(lon[idx_n]), "lat": float(lat[idx_n]),
                 "start_dt": start_dt,
                 "source_file": str(path),
             }
             for key, var in [("series_all", all_var), ("series_surge", surge_var), ("series_tide", tide_var)]:
                 if var is None:
                     continue
-                arr = np.asarray(ds[var].values)
-                # 非结构网格: (point, time) 或 (cell, time)
-                if arr.shape[0] == lon.size:
-                    s = arr[idx, :]
-                else:
-                    s = arr[-1, :]  # 兜底取末维
-                row[key] = (np.asarray(s) * 100.0).round(2).tolist()  # m -> cm
+                s = _mesh_series(ds, var, idx_n, idx)
+                if s.size:
+                    row[key] = (s * 100.0).round(2).tolist()  # m -> cm
             # 站点主序列: 有 all 用 all(总水位), 否则 surge
             row["series_cm"] = row.get("series_all") or row.get("series_surge")
+            if not row["series_cm"]:
+                continue
             sites.append(row)
         ds.close()
         return sites
@@ -339,6 +423,436 @@ def _merge_stations(stations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if key not in merged or len(s["series_cm"]) > len(merged[key]["series_cm"]):
             merged[key] = s
     return list(merged.values())
+
+
+# --------------------------------------------------------------------------- #
+# ③ 任意经纬度采样（用户点名覆盖区内的任意地点，或直接给经纬度）
+# --------------------------------------------------------------------------- #
+def _point_from_request(request: Dict[str, Any]) -> Optional[Tuple[float, float, str, str]]:
+    """从槽位读取目标点，返回 (lon, lat, 标签, 简称) 或 None。"""
+    pt = request.get("point")
+    lon = lat = None
+    if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+        try:
+            lon, lat = float(pt[0]), float(pt[1])
+        except (TypeError, ValueError):
+            lon = lat = None
+    if lon is None or lat is None:
+        return None
+    name = str(request.get("point_name", "") or "").strip()
+    label = f"{name}({lon:.2f}°E,{lat:.2f}°N)" if name else f"({lon:.2f}°E,{lat:.2f}°N)"
+    return lon, lat, label, name
+
+
+def _read_mesh_point(ctx: ModuleContext, path: str, lon_pt: float, lat_pt: float,
+                     label: str, short: str = "") -> List[Dict[str, Any]]:
+    """非结构三角网格（Ensemble / FTP *_surge.nc）任意点采样：取最近"湿节点"。
+
+    - 节点筛选：depth > 0（排除陆地/干出节点），并按距离由近及远逐个验证序列有效性
+    - 增水 = elev_surge（有则用），否则 elev_all - elev_tide
+    - 返回单站点行（series_cm 为增水，另带 series_all / series_tide 参照）
+    """
+    import xarray as xr
+
+    try:
+        ds = xr.open_dataset(path, decode_times=True)
+    except Exception:
+        return []
+
+    try:
+        if "lon" not in ds.variables or "lat" not in ds.variables:
+            return []
+        lon = np.asarray(ds["lon"].values).ravel()
+        lat = np.asarray(ds["lat"].values).ravel()
+        if lon.size < 10:
+            return []
+        all_var = "elev_all" if "elev_all" in ds.variables else None
+        surge_var = "elev_surge" if "elev_surge" in ds.variables else None
+        tide_var = "elev_tide" if "elev_tide" in ds.variables else None
+        if all_var is None and surge_var is None:
+            return []
+        midx = _mesh_index(ds)
+
+        d2 = (lon - lon_pt) ** 2 + (lat - lat_pt) ** 2
+        if "depth" in ds.variables:
+            depth = np.asarray(ds["depth"].values).ravel()
+            if depth.size == d2.size and (depth > 0).any():
+                d2 = np.where(depth > 0, d2, np.inf)
+
+        # 有效性判据：节点要有真实的潮位/水位幅度（排除河口内/边界上"数值≈0"的假节点）；
+        # 取最近 3 个有效节点做中位数，避免个别近岸浅水格点的孤立异常值
+        use_tide = tide_var is not None
+        thr = 0.3 if (use_tide or all_var is not None) else 0.05   # 单位 m
+        order = np.argsort(d2)
+        picks: List[int] = []
+        for cand in order[:80]:
+            cand = int(cand)
+            if not np.isfinite(d2[cand]):
+                continue
+            probe_var = tide_var if use_tide else (all_var or surge_var)
+            probe = _mesh_series(ds, probe_var, cand, midx)
+            fin = probe[np.isfinite(probe)]
+            if fin.size and float(np.nanmax(np.abs(fin))) > thr:
+                picks.append(cand)
+                if len(picks) >= 3:
+                    break
+        if not picks:
+            return []
+        k = picks[0]
+
+        start_dt = _time0_dt(ds, path, _base_date_hint(ctx, path))
+        row: Dict[str, Any] = {
+            "name": label,
+            "short": short or label,
+            "code": "PT",
+            "lon": round(float(lon_pt), 3), "lat": round(float(lat_pt), 3),
+            "grid_lon": round(float(lon[k]), 3), "grid_lat": round(float(lat[k]), 3),
+            "grid_dist_km": round(float(np.sqrt(d2[k])) * 111.0, 1),
+            "grid_nodes": len(picks),
+            "start_dt": start_dt,
+            "source_file": str(path),
+        }
+        for key, var in [("series_all", all_var), ("series_surge", surge_var), ("series_tide", tide_var)]:
+            if var is None:
+                continue
+            cols = [_mesh_series(ds, var, kk, midx) for kk in picks]
+            cols = [c for c in cols if c.size]
+            if not cols:
+                continue
+            n = min(len(c) for c in cols)
+            if n == 0:
+                continue
+            with np.errstate(invalid="ignore"):
+                s = np.nanmedian(np.vstack([c[:n] for c in cols]), axis=0)
+            row[key] = _fill_gaps(np.asarray(s, dtype=float) * 100.0).round(2).tolist()  # m -> cm
+        # 增水序列：优先 elev_surge，否则 all - tide
+        surge = row.get("series_surge")
+        if not surge and row.get("series_all") and row.get("series_tide"):
+            a = np.asarray(row["series_all"], dtype=float)
+            t = np.asarray(row["series_tide"], dtype=float)
+            n = min(len(a), len(t))
+            surge = (a[:n] - t[:n]).round(2).tolist()
+        row["series_cm"] = surge or row.get("series_all") or []
+        ds.close()
+        return [row] if row["series_cm"] else []
+    except Exception:
+        try:
+            ds.close()
+        except Exception:
+            pass
+        return []
+
+
+_GRID_META_CACHE: Dict[str, Any] = {}
+
+
+def _grid_meta(path: str):
+    """读取结构化网格的坐标/深度，返回"图层"列表（带缓存）。
+
+    同一文件可能有多层网格（如 2526 output_0：粗网格 elev + 厦门细网格 elevs），
+    每层形如 {"var","lon","lat","depth","extent","res"}，由调用方挑选合适的一层。
+    """
+    key = str(path)
+    if key in _GRID_META_CACHE:
+        return _GRID_META_CACHE[key]
+    import xarray as xr
+
+    layers: List[Dict[str, Any]] = []
+    try:
+        ds = xr.open_dataset(path, decode_times=True)
+    except Exception:
+        try:
+            ds = xr.open_dataset(path, decode_times=False)
+        except Exception:
+            _GRID_META_CACHE[key] = []
+            return []
+    try:
+        has_time = ("time" in ds.dims) or ("time" in ds.coords) or ("time" in ds.variables)
+        if not has_time:
+            layers = []
+        else:
+            # 图层候选：(变量, 经度名, 纬度名, 深度名)
+            cands = [
+                ("elevs", "lons", "lats", "depths"),   # 嵌套细网格（厦门附近）
+                ("elev", "lon", "lat", "depth"),       # 粗网格
+            ]
+            for var, ln, lt, dn in cands:
+                if var not in ds.variables:
+                    continue
+                lonv = ds[ln].values if ln in ds.variables else None
+                latv = ds[lt].values if lt in ds.variables else None
+                if lonv is None or latv is None:
+                    continue
+                lonv = np.asarray(lonv, dtype=float)
+                latv = np.asarray(latv, dtype=float)
+                if lonv.shape != latv.shape or lonv.ndim != 2:
+                    continue
+                dep = np.asarray(ds[dn].values, dtype=float) if dn in ds.variables else None
+                if dep is not None and dep.shape != lonv.shape:
+                    dep = None
+                layers.append({
+                    "var": var, "lon": lonv, "lat": latv, "depth": dep,
+                    "extent": (float(np.nanmin(lonv)), float(np.nanmax(lonv)),
+                               float(np.nanmin(latv)), float(np.nanmax(latv))),
+                    "res": float(np.nanmean(np.abs(np.diff(lonv, axis=1)))) if lonv.shape[1] > 1 else 1.0,
+                })
+    except Exception:
+        layers = []
+    finally:
+        try:
+            ds.close()
+        except Exception:
+            pass
+    _GRID_META_CACHE[key] = layers
+    return layers
+
+
+def _pick_layer(layers: List[Dict[str, Any]], lon_pt: float, lat_pt: float) -> Optional[Dict[str, Any]]:
+    """挑最合适的一层：优先"包含该点且分辨率最高"的图层，否则取范围最近的一层。"""
+    if not layers:
+        return None
+    inside = [L for L in layers
+              if L["extent"][0] <= lon_pt <= L["extent"][1] and L["extent"][2] <= lat_pt <= L["extent"][3]]
+    if inside:
+        return min(inside, key=lambda L: L["res"])
+    def _dist(L):
+        e = L["extent"]
+        dx = max(e[0] - lon_pt, 0.0, lon_pt - e[1])
+        dy = max(e[2] - lat_pt, 0.0, lat_pt - e[3])
+        return dx * dx + dy * dy
+    return min(layers, key=_dist)
+
+
+def _base_date_hint(ctx: ModuleContext, path: str) -> Optional[datetime.date]:
+    """推断无时间戳文件（如 output_0.nc）的起始日期。
+
+    优先文件名自带日期；否则取同台风其他带日期文件中最早的日期。
+    注意排除 atm_forecast 这类"模式大气强迫"文件——它的起报时间早于
+    风暴潮场文件的预报时段，会把基准日拉偏。
+    """
+    import re as _re
+
+    m = _re.search(r"(20\d{2})(\d{2})(\d{2})", os.path.basename(str(path)))
+    if m:
+        try:
+            return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except Exception:
+            pass
+    dates: List[datetime.date] = []
+    for key in ("wind_files", "wave_files", "station_files", "surge_files", "ensemble_files"):
+        for p in (ctx.files.get(key) or []):
+            base = os.path.basename(str(p))
+            if "atm_forecast" in base.lower() or "forcing" in base.lower():
+                continue
+            mm = _re.search(r"(20\d{2})(\d{2})(\d{2})", base)
+            if not mm:
+                continue
+            try:
+                dates.append(datetime.date(int(mm.group(1)), int(mm.group(2)), int(mm.group(3))))
+            except Exception:
+                continue
+    return min(dates) if dates else None
+
+
+def _time0_dt(ds, path: str, base_date: Optional[datetime.date]) -> Optional[datetime.datetime]:
+    """数据集时间轴起点，兼容三种编码：
+      - datetime64：直接取首值
+      - 数值 + 秒（如 2526 output_0：300, 3900, … 步长3600秒）→ 基准日 + 秒
+      - 数值 + 小时（如 0,1,2…）→ 基准日 + 小时
+    """
+    import re as _re
+
+    if "time" not in ds.variables and "time" not in ds.coords:
+        return None
+    tv = np.asarray(ds["time"].values).ravel()
+    if tv.size == 0:
+        return None
+    if np.issubdtype(tv.dtype, np.datetime64):
+        return pd_to_dt(tv[0])
+    try:
+        v0 = float(tv[0])
+        step = float(tv[1] - tv[0]) if tv.size > 1 else 3600.0
+    except (TypeError, ValueError):
+        return None
+    base = base_date
+    if base is None:
+        m = _re.search(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})", os.path.basename(str(path)))
+        if m:
+            try:
+                base = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except Exception:
+                base = None
+    if base is None:
+        return None
+    base_dt = datetime.datetime.combine(base, datetime.time(0, 0))
+    if step >= 60:      # 秒
+        return base_dt + datetime.timedelta(seconds=v0)
+    return base_dt + datetime.timedelta(hours=v0)
+
+
+def _read_grid_point(ctx: ModuleContext, path: str, lon_pt: float, lat_pt: float,
+                     label: str, short: str = "") -> List[Dict[str, Any]]:
+    """结构化网格（output_0/4 等）任意点采样：取最近"有效格点"。
+
+    有效 = depth>0（陆地/未计算区 depth=0）且该格点时间序列有真实变化（量级 > 0.5cm）。
+    多层网格时优先"包含该点、分辨率最高"的一层。
+    """
+    import xarray as xr
+
+    layers = _grid_meta(path)
+    if not layers:
+        return []
+    layer = _pick_layer(layers, lon_pt, lat_pt)
+    if layer is None:
+        return []
+    try:
+        ds = xr.open_dataset(path, decode_times=True)
+    except Exception:
+        try:
+            ds = xr.open_dataset(path, decode_times=False)
+        except Exception:
+            return []
+    try:
+        lon2, lat2, dep = layer["lon"], layer["lat"], layer["depth"]
+        d2 = (lon2 - lon_pt) ** 2 + (lat2 - lat_pt) ** 2
+        if dep is not None and dep.size == d2.size:
+            d2 = np.where(dep > 0, d2, np.inf)
+
+        arr = ds[layer["var"]]
+        dims = arr.dims
+        flat = d2.ravel()
+        picks: List[int] = []
+
+        def _at(cand: int) -> Optional[np.ndarray]:
+            jj, ii = np.unravel_index(int(cand), d2.shape)
+            try:
+                if "lat" in dims and "lon" in dims:
+                    return np.asarray(arr.isel(lat=int(jj), lon=int(ii)).values, dtype=float).ravel()
+                if dims[0] == "time":
+                    return np.asarray(arr.isel(time=slice(None))[..., int(jj), int(ii)].values, dtype=float).ravel()
+            except Exception:
+                return None
+            return None
+
+        # 取最近 3 个"有效格点"（有真实变化量级）做中位数，抑制孤立异常格点
+        for cand in np.argsort(flat)[:120]:
+            cand = int(cand)
+            if not np.isfinite(flat[cand]):
+                continue
+            ts = _at(cand)
+            if ts is None:
+                continue
+            fin = ts[np.isfinite(ts)]
+            if fin.size and float(np.nanmax(np.abs(fin))) > 5e-3:   # > 0.5 cm
+                picks.append(cand)
+                if len(picks) >= 3:
+                    break
+        if not picks:
+            return []
+        cand0 = picks[0]
+        j, i = np.unravel_index(cand0, d2.shape)
+        cols = [c for c in (_at(c2) for c2 in picks) if c is not None and c.size]
+        n = min(len(c) for c in cols)
+        with np.errstate(invalid="ignore"):
+            series = np.nanmedian(np.vstack([c[:n] for c in cols]), axis=0)
+        series = _fill_gaps(np.asarray(series, dtype=float))
+
+        start_dt = _time0_dt(ds, path, _base_date_hint(ctx, path))
+        depth_v = float(dep[j, i]) if (dep is not None and dep.size == d2.size) else None
+        row: Dict[str, Any] = {
+            "name": label,
+            "short": short or label,
+            "code": "PT",
+            "lon": round(float(lon_pt), 3), "lat": round(float(lat_pt), 3),
+            "grid_lon": round(float(lon2[j, i]), 3), "grid_lat": round(float(lat2[j, i]), 3),
+            "grid_dist_km": round(float(np.sqrt((lon2[j, i] - lon_pt) ** 2 + (lat2[j, i] - lat_pt) ** 2)) * 111.0, 1),
+            "grid_depth_m": round(depth_v, 1) if depth_v is not None else None,
+            "grid_layer": layer["var"],
+            "grid_nodes": len(cols),
+            "start_dt": start_dt,
+            "source_file": str(path),
+            "series_cm": (series * 100.0).round(2).tolist(),  # m -> cm
+        }
+        ds.close()
+        return [row]
+    except Exception:
+        try:
+            ds.close()
+        except Exception:
+            pass
+        return []
+
+
+def _point_source_chain(ctx: ModuleContext) -> List[str]:
+    """任意点采样的数据源尝试顺序（非结构网格优先，其次结构化网格）。"""
+    cands = [
+        ctx.files.get("nc_forecast_num") or "",
+        ctx.files.get("nc_forecast_num_alt") or "",
+    ]
+    cands += list(ctx.files.get("surge_files") or [])
+    out: List[str] = []
+    for p in cands:
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
+def _run_point(ctx: ModuleContext, lon_pt: float, lat_pt: float, label: str, short: str,
+               region: str, hours: Optional[int],
+               target_date: Optional[datetime.date] = None) -> Optional[Dict[str, Any]]:
+    """在模式场/网格上按点采样；成功返回 geo_stats 结果，失败返回 None。"""
+    for path in _point_source_chain(ctx):
+        sites = _read_mesh_point(ctx, path, lon_pt, lat_pt, label, short)
+        src = "mesh"
+        if not sites:
+            sites = _read_grid_point(ctx, path, lon_pt, lat_pt, label, short)
+            src = "grid"
+        if sites:
+            if target_date:
+                sites = _slice_by_date(sites, target_date)
+            geo = _finalize(sites, region, "ensemble" if src == "mesh" else "grid", path, hours)
+            geo["custom_point"] = True
+            geo["point_lon"] = round(lon_pt, 3)
+            geo["point_lat"] = round(lat_pt, 3)
+            geo["point_name"] = short
+            geo["sample_kind"] = src
+            s0 = sites[0]
+            geo["sample_lon"] = s0.get("grid_lon")
+            geo["sample_lat"] = s0.get("grid_lat")
+            geo["sample_dist_km"] = s0.get("grid_dist_km")
+            if s0.get("series_all"):
+                geo["max_all_cm"] = round(float(np.nanmax(np.asarray(s0["series_all"], dtype=float))), 1)
+            return geo
+    return None
+
+
+def _nearest_station_fallback(ctx: ModuleContext, lon_pt: float, lat_pt: float,
+                              region: str, hours: Optional[int],
+                              target_date: Optional[datetime.date] = None) -> Optional[Dict[str, Any]]:
+    """兜底：该台风只有本站单点数据时，用最近站点代替并注明。"""
+    from orchestrator import geo_domain
+
+    st_name, dist_km = geo_domain.nearest_station(lon_pt, lat_pt)
+    paths = _pick_station_files(ctx.files.get("station_files") or [],
+                                ctx.results.get("meta", {}).get("typhoon", "") or "")
+    sites = _read_station_data(paths) if paths else []
+    if not sites:
+        return None
+    want = [s for s in sites if st_name in str(s.get("name", ""))]
+    if not want:
+        return None
+    if target_date:
+        want = _slice_by_date(want, target_date)
+    geo = _finalize(want[:1], region, "station", paths[0] if paths else "", hours)
+    geo["custom_point"] = True
+    geo["point_lon"] = round(lon_pt, 3)
+    geo["point_lat"] = round(lat_pt, 3)
+    geo["sample_kind"] = "nearest_station"
+    geo["sample_station"] = st_name
+    geo["sample_dist_km"] = dist_km
+    geo["sample_lon"] = want[0].get("lon")
+    geo["sample_lat"] = want[0].get("lat")
+    return geo
 
 
 # --------------------------------------------------------------------------- #
@@ -485,6 +999,18 @@ def run(ctx: ModuleContext) -> ModuleContext:
     hours = _parse_window_hours(ctx.request.get("time_window", ""))
     target_date = _parse_target_date(ctx.request.get("date", ""))
 
+    # ⭐⭐ 任意经纬度/任意地名：按点采样（优先级最高）
+    pt = _point_from_request(ctx.request)
+    if pt:
+        lon_pt, lat_pt, label, short = pt
+        geo = _run_point(ctx, lon_pt, lat_pt, label, short, region, hours, target_date)
+        if geo is None:
+            geo = _nearest_station_fallback(ctx, lon_pt, lat_pt, region, hours, target_date)
+        if geo:
+            ctx.results["geo_stats"] = geo
+            _attach_wave(ctx)
+            return ctx
+
     # ⭐ Ensemble/FTP 集合数据优先（2403/1521/1614：自带总水位/天文潮/增水）
     ens_path = ctx.files.get("nc_forecast_num", "")
     ens_like = ("Ensemble" in ens_path.replace("\\", "/")) or ("ftp" in ens_path.replace("\\", "/").lower())
@@ -552,17 +1078,37 @@ def judge_wave(hs_m: float) -> str:
 
 
 def run_wave(ctx: ModuleContext, hours: Optional[int] = None) -> Dict[str, Any]:
-    """海浪统计：扫描 M1/R1 海浪文件，采样目标海域最大波高（可按时间窗截取）。"""
+    """海浪统计：扫描 M1/R1 海浪文件。
+
+    - 未指定点：采样目标海域(厦门附近 WAVE_BOX)逐时最大波高
+    - 指定点(lon/lat)：在波高场上按最近格点取该点的逐时波高序列
+    """
     import xarray as xr
 
     paths = ctx.files.get("wave_files") or []
     if not paths:
         return {"status": "no_data", "series": []}
 
+    pt = _point_from_request(ctx.request)
+
     # 优先 M1（细网格,厦门附近），否则 R1
     m1 = [p for p in paths if "M1" in os.path.basename(p)]
     r1 = [p for p in paths if "R1" in os.path.basename(p)]
-    chosen = sorted(m1) or sorted(r1)
+    if pt:
+        # 点采样：点在 M1 细网格范围内用 M1，否则用 R1（范围更大）
+        in_m1 = False
+        if m1:
+            try:
+                ds0 = xr.open_dataset(m1[0], decode_times=False)
+                alon = np.asarray(ds0["alon"].values if "alon" in ds0.variables else ds0["lon"].values, dtype=float)
+                alat = np.asarray(ds0["alat"].values if "alat" in ds0.variables else ds0["lat"].values, dtype=float)
+                ds0.close()
+                in_m1 = (np.nanmin(alon) <= pt[0] <= np.nanmax(alon)) and (np.nanmin(alat) <= pt[1] <= np.nanmax(alat))
+            except Exception:
+                in_m1 = False
+        chosen = (sorted(m1) if in_m1 else sorted(r1)) or sorted(m1) or sorted(r1)
+    else:
+        chosen = sorted(m1) or sorted(r1)
     if not chosen:
         return {"status": "no_data", "series": []}
 
@@ -570,17 +1116,70 @@ def run_wave(ctx: ModuleContext, hours: Optional[int] = None) -> Dict[str, Any]:
     need_files = max(1, -(-(hours or 24) // 24)) if hours else len(chosen)
     chosen = chosen[:need_files]
 
-    # 拼接各文件逐时最大序列
+    # 拼接各文件逐时序列
     full_series: List[float] = []
+    sampled_at: Dict[str, Any] = {}
     for p in chosen:
         try:
             ds = xr.open_dataset(p, decode_times=False)
         except Exception:
             continue
         try:
-            hs = ds["hs"].values
+            hs = ds["hs"]
             alon = ds["alon"].values if "alon" in ds.variables else ds["lon"].values
             alat = ds["alat"].values if "alat" in ds.variables else ds["lat"].values
+            if pt:
+                # —— 任意点采样：取"离点最近且波高有效"的格点（排除陆地/全 0 格点）——
+                lonv = ds["lon"].values if "lon" in ds.variables else np.asarray(alon).ravel()
+                latv = ds["lat"].values if "lat" in ds.variables else np.asarray(alat).ravel()
+                ts = np.asarray([])
+                if np.asarray(lonv).ndim == 1 and np.asarray(latv).ndim == 1:
+                    lonv = np.asarray(lonv, dtype=float)
+                    latv = np.asarray(latv, dtype=float)
+                    cands = []
+                    for di in range(-10, 11):
+                        for dj in range(-10, 11):
+                            i = int(np.abs(lonv - pt[0]).argmin()) + di
+                            j = int(np.abs(latv - pt[1]).argmin()) + dj
+                            if not (0 <= i < lonv.size and 0 <= j < latv.size):
+                                continue
+                            sel = {}
+                            if "lon" in hs.dims:
+                                sel["lon"] = i
+                            if "lat" in hs.dims:
+                                sel["lat"] = j
+                            if not sel:
+                                continue
+                            try:
+                                cand = np.asarray(hs.isel(**sel).values, dtype=float).ravel()
+                            except Exception:
+                                continue
+                            fin = cand[np.isfinite(cand)]
+                            if not fin.size or float(np.nanmax(fin)) <= 0.2:   # 波高 <= 0.2m 视为无效(陆地/静水)
+                                continue
+                            d = float(np.hypot((lonv[i] - pt[0]) * np.cos(np.radians(pt[1])), latv[j] - pt[1])) * 111.0
+                            if d > 55.0:      # 离点太远（>55km）不作为该点代表
+                                continue
+                            cands.append((d, i, j, cand))
+                    if cands:
+                        cands.sort(key=lambda t: t[0])
+                        d, i, j, ts = cands[0]
+                        sampled_at = {"lon": round(float(lonv[i]), 3), "lat": round(float(latv[j]), 3),
+                                      "dist_km": round(d, 1)}
+                else:  # 非结构：最近节点
+                    m = np.asarray(alon).ravel()
+                    n = np.asarray(alat).ravel()
+                    k = int(np.argmin((m - pt[0]) ** 2 + (n - pt[1]) ** 2))
+                    ts = np.asarray(hs.values[k, :], dtype=float) if hs.shape[0] == m.size else np.asarray(hs.values, dtype=float).ravel()
+                    sampled_at = {"lon": round(float(m[k]), 3), "lat": round(float(n[k]), 3)}
+                if ts.size:
+                    valid = ts[np.isfinite(ts)]
+                    if valid.size:
+                        full_series.extend(float(v) for v in valid)
+                        continue
+                # 该文件不含有效数据 → 换下一个文件
+                continue
+            # —— 默认：目标海域海域最大 ——
             if np.asarray(alon).ndim == 1:
                 mask = ((alon >= WAVE_BOX[0]) & (alon <= WAVE_BOX[1]))[:, None] & \
                        ((alat >= WAVE_BOX[2]) & (alat <= WAVE_BOX[3]))[None, :]
@@ -611,11 +1210,13 @@ def run_wave(ctx: ModuleContext, hours: Optional[int] = None) -> Dict[str, Any]:
     level = judge_wave(best["max_hs_m"])
     return {
         "status": "ok",
-        "source": "M1" if m1 else "R1",
+        "source": "M1" if (chosen and chosen[0] in m1) else "R1",
         "file": best["file"],
         "max_hs_m": best["max_hs_m"],
         "level": level,
         "peak_time": f"第{best['peak_idx']}时次",
         "series": best["series_m"],
         "time_window_hours": hours,
+        "point": sampled_at or None,
+        "mode": "point" if pt else "box",
     }

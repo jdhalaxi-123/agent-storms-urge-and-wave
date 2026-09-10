@@ -45,6 +45,24 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
             "meta": {"status": reason, "matched": chk.get("matched")},
         }
 
+    # ⭐ 任意点采样：命中具体地点/经纬度且不属于本站站点时，
+    #    把坐标写入槽位，由 geo_stats 在模式场/网格上按点取序列
+    coord = chk.get("coord")
+    if coord and not chk.get("station"):
+        try:
+            lo, la = float(coord[0]), float(coord[1])
+        except (TypeError, ValueError):
+            lo = la = None  # type: ignore
+        if lo is not None and la is not None:
+            slots["point"] = [lo, la]
+            matched = str(chk.get("matched") or "")
+            if matched and not matched.startswith("("):
+                slots["point_name"] = matched
+            else:
+                # 只给了坐标：标题用坐标表示
+                slots["region"] = f"{lo:.2f}°E, {la:.2f}°N"
+            slots["nearest_station"] = chk.get("nearest_station", "")
+
     # 场景路由：槽位 → 命中的模块实现标识
     routes = router.resolve(slots)
 

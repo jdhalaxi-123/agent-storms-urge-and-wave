@@ -31,6 +31,10 @@ SYSTEM_PROMPT = (
     "只报告工具实际返回的路径，不要推测不存在的路径。"
     "当用户明确要求下载/同步某数据时，调用 ftp_sync 工具同步到本地，并告知同步了多少文件/多大。"
     "注意区分：问“数据在哪/有什么”→ ftp_query；问“预报结论/画图/看风场”→ forecast_risk。"
+    "【任意地点/经纬度】用户给出经纬度（如“120.5°E, 24.5°N”“东经120.5 北纬24.5”）时，"
+    "在 region 里原样写上该坐标，并同时填写 lon / lat 两个参数；"
+    "用户给出覆盖区内的任意沿海地名（如福州、平潭、澎湖、金门、高雄、汕头、温州）时，"
+    "直接填 region，系统会在该地点的坐标处采样模式场，不需要再问经纬度。"
     "【覆盖范围】若 forecast_risk 返回“不在覆盖范围”的说明（如上海、青岛等），"
     "直接如实转达该说明，**绝不可自行编造该海域的任何数据或结论**。"
     "【需追问】若 forecast_risk 返回“范围较大，请具体说明位置”的追问说明"
@@ -53,7 +57,14 @@ FORECAST_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "region": {"type": "string", "description": "海域或地名，如：厦门、浙江沿海；缺省为厦门"},
+                "region": {
+                    "type": "string",
+                    "description": (
+                        "海域或地名，如：厦门、崇武、晋江、东山东港、福州、平潭、泉州、"
+                        "澎湖、金门、马祖、高雄、基隆、汕头、温州、台州；缺省为厦门。"
+                        "覆盖区内的任意沿海地名都会在该坐标处采样模式场。"
+                    ),
+                },
                 "disaster": {
                     "type": "string",
                     "enum": ["storm_surge", "wave"],
@@ -63,8 +74,20 @@ FORECAST_TOOL = {
                 "risk_type": {"type": "string", "description": "风险类型，如：海水倒灌、增水、浪高"},
                 "typhoon": {"type": "string", "description": "台风编号（可省略），如：2526、2403、1521、1614；用户未指定台风时省略"},
                 "date": {"type": "string", "description": "查看日期（可省略），如：7月22日、2024-07-22；用户指定具体日期时填写，否则省略"},
-                "lon": {"type": "number", "description": "任意点经度（可省略，与lat配对），如 118.5；用户给出经纬度坐标时填写"},
-                "lat": {"type": "number", "description": "任意点纬度（可省略，与lon配对），如 24.3；用户给出经纬度坐标时填写"},
+                "lon": {
+                    "type": "number",
+                    "description": (
+                        "任意点经度（东经，十进制度，如 120.5），必须与 lat 成对出现。"
+                        "用户给出经纬度坐标时填写；只说了地名时不要填（由 region 自动定位）。"
+                    ),
+                },
+                "lat": {
+                    "type": "number",
+                    "description": (
+                        "任意点纬度（北纬，十进制度，如 24.5），必须与 lon 成对出现。"
+                        "用户给出经纬度坐标时填写。"
+                    ),
+                },
                 "plot": {
                     "type": "string",
                     "enum": ["wind", "surge_station", "surge_field", "wave", "all"],

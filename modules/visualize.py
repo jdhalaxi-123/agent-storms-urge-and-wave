@@ -48,7 +48,32 @@ def _tag(ctx: ModuleContext) -> str:
         parts.append("7天")
     else:
         parts.append("全部")
+    # 任意采样点：文件名带上点位，避免不同地点的图互相覆盖
+    pt = ctx.request.get("point")
+    if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+        try:
+            parts.append("P%.2f_%.2f" % (float(pt[0]), float(pt[1])))
+        except (TypeError, ValueError):
+            pass
     return "_".join(parts) if parts else "全部"
+
+
+def _mark_point(ax, ctx: ModuleContext):
+    """在空间分布图上标注用户查询的目标点。"""
+    pt = ctx.request.get("point")
+    if not (isinstance(pt, (list, tuple)) and len(pt) >= 2):
+        return
+    try:
+        lo, la = float(pt[0]), float(pt[1])
+    except (TypeError, ValueError):
+        return
+    name = str(ctx.request.get("point_name", "") or "")
+    ax.plot([lo], [la], marker="*", markersize=13, color="#d6001c",
+            markeredgecolor="white", markeredgewidth=0.8, zorder=6)
+    ax.annotate(f" {name}({lo:.2f}°E,{la:.2f}°N)" if name else f" ({lo:.2f}°E,{la:.2f}°N)",
+                (lo, la), textcoords="offset points", xytext=(7, 4),
+                fontsize=8, color="#d6001c", zorder=6)
+
 
 
 def run(ctx: ModuleContext) -> ModuleContext:
@@ -141,6 +166,7 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
 
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
+    import numpy as np
 
     geo = ctx.results.get("geo_stats", {}) or {}
     region = geo.get("region") or ctx.request.get("region") or "目标海域"
@@ -148,8 +174,6 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
 
     # 一张图: 单站点(若多站, 取重点或分别画到一张? 项目组风格是一站一图)
     # 简单起见: 画出 sites 里每个站折线(黑灰调), 主站黑色; 若单站 => 纯黑
-    import numpy as np
-
     fig, ax = plt.subplots(figsize=(9.0, 2.6), dpi=110)  # 扁长
     colors = ["black", "#666666", "#999999", "#aaaaaa", "#bbbbbb"]
     for si, s in enumerate(sites[:5]):
@@ -159,13 +183,15 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
         # 构造真实时间轴(起始 start_dt, 每小时)
         st_dt = s.get("start_dt")
         if st_dt:
-            import numpy as np
             x = [st_dt + datetime.timedelta(hours=k) for k in range(len(ser))]
         else:
             x = np.arange(len(ser))
         ax.plot(x, ser, lw=0.9, color=colors[si % len(colors)], label=s["name"])
-        vmax = max(ser)
-        kmax = int(np.argmax(ser))
+        arr = np.asarray(ser, dtype=float)
+        if not np.isfinite(arr).any():
+            continue
+        vmax = float(np.nanmax(arr))
+        kmax = int(np.nanargmax(arr))
         ax.annotate(f"{vmax:.0f}cm", (x[kmax], vmax), textcoords="offset points",
                     xytext=(4, 4), fontsize=7, color=colors[si % len(colors)])
 
@@ -177,7 +203,7 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
 
     # 标题: 站名(时间范围) —— 与项目组一致
     s0 = sites[0] if sites else {}
-    sname = s0.get("name", region)
+    sname = s0.get("short") or s0.get("name", region)
     st = s0.get("start_dt") or datetime.datetime.now()
     n = len(s0.get("series_full") or s0.get("series") or [])
     en = st + datetime.timedelta(hours=n) if n else st
@@ -267,7 +293,7 @@ def _draw_mesh_surge_map(OUT_DIR: Path, ctx: ModuleContext, path: str, tag: str)
         if not has_surge and not (has_all and has_tide):
             return ""
 
-        # 分块计算逐节点时间最大值
+        # 分块计算逐节点/逐面时间最大值
         best = None
         chunk = 48
         for s in range(0, len(idx), chunk):
@@ -284,11 +310,19 @@ def _draw_mesh_surge_map(OUT_DIR: Path, ctx: ModuleContext, path: str, tag: str)
         # m -> cm
         field = best * 100.0
 
-        # 陆地掩膜：depth<=0 的节点（陆地/干出）数值不可信，置 NaN
+        # 陆地掩膜：字段长度与节点数一致时按节点 depth 屏蔽；
+        # 与三角形数一致（Ensemble 面中心量）时按三角形三节点 depth 屏蔽。
         if "depth" in ds.variables:
             depth = np.asarray(ds["depth"].values).ravel()
             if len(depth) == field.size:
                 field = np.where(depth > 0, field, np.nan)
+            elif len(depth) == lon.size and field.size == tri.shape[0]:
+                wet = depth > 0
+                face_wet = wet[tri].all(axis=1)
+                field = np.where(face_wet, field, np.nan)
+            shading_mode = "gouraud" if field.size == lon.size else "flat"
+        else:
+            shading_mode = "gouraud" if field.size == lon.size else "flat"
 
         typh = str(ctx.request.get("typhoon", "") or "")
         date_txt = ""
@@ -309,7 +343,7 @@ def _draw_mesh_surge_map(OUT_DIR: Path, ctx: ModuleContext, path: str, tag: str)
         peak = float(np.nanmax(finite))
 
         fig, ax = plt.subplots(figsize=(7.4, 4.6), dpi=110)
-        tp = ax.tripcolor(triang, field, shading="gouraud", cmap="YlOrRd", vmin=0, vmax=vmax)
+        tp = ax.tripcolor(triang, field, shading=shading_mode, cmap="YlOrRd", vmin=0, vmax=vmax)
         cb = fig.colorbar(tp, ax=ax, shrink=0.9)
         cb.set_label("过程最大增水 (cm)", fontsize=8)
         ax.set_xlim(114.5, 127.5)
@@ -322,6 +356,7 @@ def _draw_mesh_surge_map(OUT_DIR: Path, ctx: ModuleContext, path: str, tag: str)
         ax.set_xlabel("经度", fontsize=9)
         ax.set_ylabel("纬度", fontsize=9)
         ax.tick_params(labelsize=8)
+        _mark_point(ax, ctx)
         fig.tight_layout(pad=1.0)
         fp = OUT_DIR / f"field_mesh_{tag}.png"
         fig.savefig(fp, bbox_inches="tight")
@@ -401,6 +436,7 @@ def _draw_field_map(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
         ax.set_xlabel("经度", fontsize=9)
         ax.set_ylabel("纬度", fontsize=9)
         ax.tick_params(labelsize=8)
+        _mark_point(ax, ctx)
         fig.tight_layout(pad=1.0)
         p = OUT_DIR / f"{fname}.png"
         fig.savefig(p, bbox_inches="tight")
@@ -649,6 +685,7 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
     ax.set_xlabel("经度", fontsize=9)
     ax.set_ylabel("纬度", fontsize=9)
     ax.tick_params(labelsize=8)
+    _mark_point(ax, ctx)
     fig.tight_layout(pad=1.0)
     fp = OUT_DIR / f"wind_field_{tag}.png"
     fig.savefig(fp, bbox_inches="tight")

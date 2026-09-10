@@ -43,10 +43,17 @@ def parse(text: str) -> Dict[str, Any]:
 
 def parse_by_rules(text: str) -> Dict[str, Any]:
     """规则解析兜底（零依赖）。"""
+    from . import geo_domain
+
+    lon, lat = geo_domain.parse_coord(text)
+    region, point_name = _match_region(text)
     return {
         "disaster": _match_any(text, DISASTER_RULES, "unknown"),
         "risk_type": _match_any(text, RISK_RULES, "general"),
-        "region": _match_region(text),
+        "region": region,
+        "point_name": point_name,
+        "lon": lon,
+        "lat": lat,
         "time_window": _match_time_window(text),
         "raw": text,
     }
@@ -64,11 +71,22 @@ def _match_any(text: str, rules: List[Tuple[List[str], str]], default: str) -> s
     return default
 
 
-def _match_region(text: str) -> str:
+def _match_region(text: str) -> Tuple[str, str]:
+    """规则匹配地名：先查完整地名字典，再退回内置简表。
+
+    返回 (region 显示名, 命中的地点名或 "")。
+    """
+    from . import geo_domain
+
+    # 优先按内置简表（保持既有行为）
     for name, full in REGION_DICT.items():
         if name in text:
-            return full
-    return "未知海域"
+            return full, name
+    # 再按完整地名字典匹配（覆盖区内的任意沿海地名）
+    name, _coord = geo_domain.locate(text)
+    if name:
+        return name, name
+    return "未知海域", ""
 
 
 def _match_time_window(text: str) -> Optional[str]:

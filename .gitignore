@@ -32,6 +32,11 @@ data/
 # ===== 输出产物 =====
 outputs/
 
+# ===== 本地运行记录（含对话内容，不上传） =====
+AgentRecord.*.jsonl
+AgentRecord.session.jsonl
+AgentRecord.chat.jsonl
+
 # ===== 临时/系统 =====
 *.log
 .DS_Store
