@@ -42,6 +42,10 @@ AgentRecord.*.jsonl
 AgentRecord.session.jsonl
 AgentRecord.chat.jsonl
 
+# ===== 内部行政材料（含人名/项目/经费信息，不上传） =====
+docs/情况说明*
+docs/*.docx
+
 # ===== 临时/系统 =====
 *.log
 .DS_Store
