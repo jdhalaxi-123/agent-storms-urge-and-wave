@@ -1,0 +1,23 @@
+﻿feat: 台风期间数据取数模块(10个完整台风) + 完整性表生成脚本
+
+modules/ftp_typhoon.py —— 从 FTP 按需取六类台风期间数据:
+  load_station_surge() 站点纯增水过程(8.5KB/天, 4站)     3.7s
+  load_surge_field()   全场增水(2MB, 0.25度, 114-128E/17-30N)  0.1s(缓存)
+  load_wave_point()    16个浮标站波高过程(swh, 10-16KB/站) 1.0s
+  load_observation()   浮标实测(波高/潮位/风/气压, 1.4MB)
+  load_tide_total()    裁剪场 output_0(天文潮)+output_4(总水位), 相减=增水
+  sample_field()       场上按点采样
+
+时间轴兼容 datetime64 / 小时 / 秒 三种编码; 裁剪场无 units 时用同台风课题三场日期兜底
+空间维兼容 lat/lon 与 ny/nx 两套命名
+
+10 个完整台风(1513 1521 1601 1614 1617 1709 1808 2305 2311 2403) 全部实测通过:
+  站点增水 39~113cm / 全场最大 157~343cm / 波高 3.7~15.4m / 实测波高 8.2~17.1m
+
+修 ftp_catalog:
+  _stat_size 改用 ftp.SIZE 并回退父目录列表(原实现对文件路径失效,
+  导致实测/集合/非结构网格数据源未被识别)
+  fetch() 增加 quiet 参数, 批量下载不再刷屏
+
+新增 scripts/ftp_data_matrix.py: 扫描生成《FTP台风数据完整性表》
+新增 scripts/test_ftp_typhoon.py: 取数模块自检

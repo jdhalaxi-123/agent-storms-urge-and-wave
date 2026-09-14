@@ -93,8 +93,16 @@ def _typhoon_ids(ftp, path: str, prefix: str = "") -> List[str]:
 
 
 def _stat_size(ftp, path: str) -> int:
-    for e in _ls(ftp, path):
-        if not e["dir"]:
+    """取单个远程文件的字节数（mlsd 只能列目录，所以要先试 SIZE，再退回父目录列表）。"""
+    try:
+        sz = ftp.size(path)
+        if sz:
+            return int(sz)
+    except Exception:
+        pass
+    parent, _, name = path.rpartition("/")
+    for e in _ls(ftp, parent or "/"):
+        if e["name"] == name and not e["dir"]:
             return e["size"]
     return 0
 
@@ -275,7 +283,7 @@ def best_source(cat: Dict[str, Any], want: str) -> Optional[Dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # 按需下载 + 缓存
 # --------------------------------------------------------------------------- #
-def fetch(remote: str, force: bool = False, expected_size: int = 0) -> Optional[str]:
+def fetch(remote: str, force: bool = False, expected_size: int = 0, quiet: bool = True) -> Optional[str]:
     """把远程文件下到本地缓存，返回本地路径；已存在且大小一致则直接复用。"""
     if not remote:
         return None
@@ -285,7 +293,13 @@ def fetch(remote: str, force: bool = False, expected_size: int = 0) -> Optional[
         if not expected_size or abs(local.stat().st_size - expected_size) < 1024:
             return str(local)
     try:
-        ftp_client.download(remote, str(local))
+        if quiet:
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                ftp_client.download(remote, str(local))
+        else:
+            ftp_client.download(remote, str(local))
         return str(local)
     except Exception as e:  # noqa: BLE001
         print(f"[ftp_catalog] 下载失败 {remote}: {e}")
@@ -293,7 +307,7 @@ def fetch(remote: str, force: bool = False, expected_size: int = 0) -> Optional[
 
 
 def fetch_many(items: List[Dict[str, Any]], force: bool = False,
-               max_total_mb: float = 0) -> List[str]:
+               max_total_mb: float = 0, quiet: bool = True) -> List[str]:
     """批量下载。items 为 [{"path":..., "size":...}, ...]。
 
     max_total_mb > 0 时，累计超过阈值即停止（防止误下超大文件）。
@@ -305,7 +319,7 @@ def fetch_many(items: List[Dict[str, Any]], force: bool = False,
         if max_total_mb and total + sz / 1e6 > max_total_mb:
             print(f"[ftp_catalog] 已达下载上限 {max_total_mb} MB，跳过 {os.path.basename(p)}")
             continue
-        lp = fetch(p, force=force, expected_size=sz)
+        lp = fetch(p, force=force, expected_size=sz, quiet=quiet)
         if lp:
             out.append(lp)
             total += sz / 1e6
