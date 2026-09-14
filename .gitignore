@@ -58,3 +58,4 @@ _git_installer.exe
 # ===== VS Code =====
 .vscode/*
 !.vscode/settings.json
+_cmsg.txt
