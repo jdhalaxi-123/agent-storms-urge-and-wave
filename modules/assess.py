@@ -11,7 +11,10 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import datetime
+from typing import Any, Dict, Optional
+
+import numpy as np
 
 from orchestrator.contract import ModuleContext
 
@@ -91,6 +94,38 @@ def judge_by_warn_level(total_level_cm: float, warn: dict) -> str:
     return "无"
 
 
+def _extra_note(geo: Dict[str, Any]) -> str:
+    """附加上数据来源与实测对比信息（FTP 台风期间数据）。"""
+    parts = []
+    obs = geo.get("observation") or {}
+    if obs:
+        bits = []
+        if obs.get("wave_H_max") is not None:
+            bits.append(f"最大有效波高 {obs['wave_H_max']} m")
+        if obs.get("tide_tide_max") is not None:
+            bits.append(f"最高潮位 {obs['tide_tide_max']} m")
+        if bits:
+            parts.append(f"实测对照：本台风浮标实测{'、'.join(bits)}"
+                         f"（{obs.get('n_buoy')} 个浮标站 / {obs.get('n_tide')} 个潮位站，"
+                         f"可用于计算预报误差）。")
+    wp = geo.get("wave_points") or []
+    if wp:
+        top = wp[0]
+        if top.get("max_hs_m") is not None:
+            parts.append(f"浮标预报波高最大 {top['max_hs_m']} m（站号 {top.get('station')}），"
+                         f"对应海浪{judge_wave_level(top['max_hs_m'])}预警。")
+    if geo.get("data_source"):
+        parts.append(f"数据来源：{geo['data_source']}，按需取数、未落地全量数据。")
+    return ("\n" + "\n".join(parts)) if parts else ""
+
+
+def judge_wave_level(hs_m: float) -> str:
+    for name, th in (("红色", 9.0), ("橙色", 6.0), ("黄色", 4.0), ("蓝色", 2.5)):
+        if hs_m >= th:
+            return name
+    return "无"
+
+
 def run(ctx: ModuleContext) -> ModuleContext:
     geo = ctx.results.get("geo_stats", {}) or {}
     sites = geo.get("sites", []) or []
@@ -114,8 +149,53 @@ def run(ctx: ModuleContext) -> ModuleContext:
     peak_site = geo.get("peak_site", "厦门港")
     peak_time = geo.get("peak_time", "")
 
+    # ---- FTP 台风期间数据：优先用"总水位对照警戒潮位"（业务口径）----
+    tt = geo.get("tide_total") or {}
+    tt_map: Dict[str, Any] = {}
+    for p in (tt.get("points") or []):
+        tot = [v for v in (p.get("series_total_cm") or []) if v is not None]
+        sur = [v for v in (p.get("series_surge_cm") or []) if v is not None]
+        tid = [v for v in (p.get("series_tide_cm") or []) if v is not None]
+        if not tot:
+            continue
+        k = int(np.argmax(tot))
+        step = tt.get("step_hours", 1) or 1
+        pk_dt = None
+        if tt.get("start_dt"):
+            try:
+                pk_dt = tt["start_dt"] + datetime.timedelta(hours=k * step)
+            except Exception:
+                pk_dt = None
+        tt_map[str(p.get("name", ""))] = {
+            "total_max": round(max(tot), 1),
+            "surge_max": round(max(sur), 1) if sur else None,
+            "tide_max": round(max(tid), 1) if tid else None,
+            "tide_min": round(min(tid), 1) if tid else None,
+            "peak_dt": pk_dt,
+            "warn": _find_warn(str(p.get("name", ""))),
+        }
+
+    # 有总水位 + 有该站警戒潮位 → 业务口径判级
+    ftp_warn_sites = {k: v for k, v in tt_map.items() if v.get("warn")}
+    if ftp_warn_sites:
+        top = max(ftp_warn_sites.items(), key=lambda kv: kv[1]["total_max"])
+        top_name, top_v = top
+        level = judge_by_warn_level(top_v["total_max"], top_v["warn"])
+        peak_site = top_name
+        if top_v.get("peak_dt"):
+            peak_time = top_v["peak_dt"].strftime("%m-%d %H:%M")
+        max_cm = top_v["total_max"]
+        if level == "无":
+            basis = (f"过程最高总水位 {top_v['total_max']:.1f}cm（{top_name}），"
+                     f"未达该站蓝色警戒潮位 {top_v['warn']['blue']}cm；"
+                     f"最大风暴增水 {top_v.get('surge_max')}cm")
+        else:
+            basis = (f"过程最高总水位 {top_v['total_max']:.1f}cm（{top_name}），"
+                     f"达到该站{level}警戒潮位（{top_v['warn']['color']}cm，85黄零基准）；"
+                     f"最大风暴增水 {top_v.get('surge_max')}cm")
+        is_total_level = True
     # 判级：Ensemble(总水位) 对照警戒潮位表；否则增水阈值
-    if is_total_level:
+    elif is_total_level:
         # 总水位判级: 取全区最大站点的警戒潮位对照
         top_warn = _find_warn(peak_site)
         level = judge_by_warn_level(max_cm, top_warn) if top_warn else judge(max_cm)
@@ -129,33 +209,51 @@ def run(ctx: ModuleContext) -> ModuleContext:
             basis = f"过程最大增水 {max_cm:.1f}cm，未达蓝色阈值(30cm)"
         else:
             basis = f"过程最大增水 {max_cm:.1f}cm(位于{peak_site})，达到{level}预警阈值"
+        if tt_map:
+            t2 = max(tt_map.items(), key=lambda kv: kv[1]["total_max"])
+            basis += f"；{t2[0]}最高总水位 {t2[1]['total_max']:.1f}cm（参照）"
         if is_point and geo.get("max_all_cm"):
             basis += f"；该点过程最高水位 {geo['max_all_cm']:.1f}cm（参照）"
 
     # 站点表（简报的潮位×警戒潮位对照表，用各站真实警戒潮位）
     stations = []
     for s in sites:
-        cm = s.get("max_surge_cm", 0.0)
+        cm = s.get("max_surge_cm", 0.0)          # 该站的**最大增水**(cm)
         sname = s.get("name", "")
         key = STATION_NAME_MAP.get(sname, sname)
         warn = STATION_WARN_LEVELS.get(key) or STATION_WARN_LEVELS.get(sname)
         if is_point and not warn:
             warn = None
-        # Ensemble(总水位) -> 对照该站警戒潮位判级; 否则增水阈值
-        lv = judge_by_warn_level(cm, warn) if (is_total_level and warn) else judge(cm)
+        tt_s = tt_map.get(sname) or {}
+        total_cm = tt_s.get("total_max")         # 该站的**最高总水位**(cm)
+        # 有总水位就用总水位对照警戒潮位判（业务口径）；否则按增水分级
+        if total_cm is not None and warn:
+            lv = judge_by_warn_level(total_cm, warn)
+            judge_on = total_cm
+        else:
+            lv = judge_by_warn_level(cm, warn) if (is_total_level and warn) else judge(cm)
+            judge_on = cm
         pt = s.get("peak_time", "")
         pd = s.get("peak_date", "")
+        if tt_s.get("peak_dt"):
+            pt = tt_s["peak_dt"].strftime("%m-%d %H:%M")
+            pd = tt_s["peak_dt"].strftime("%Y-%m-%d")
         if warn:
             warn_text = warn["color"] + "(蓝/黄/橙/红)"
         elif is_point:
-            warn_text = f"30/50/80/120(增水分级)"
+            warn_text = "30/50/80/120(增水分级)"
         else:
             warn_text = "700(蓝)/720(黄)/740(橙)/760(红)"
         stations.append({
             "station": sname,
             "date": pd,
             "time": pt,
-            "high_tide_cm": round(cm, 1),
+            "high_tide_cm": round(judge_on, 1),          # 用于判级的那个量
+            "max_total_cm": round(total_cm, 1) if total_cm is not None else None,
+            "max_surge_cm": round(cm, 1),
+            "tide_range_cm": (round(tt_s["tide_max"] - tt_s["tide_min"], 1)
+                              if tt_s.get("tide_max") is not None
+                              and tt_s.get("tide_min") is not None else None),
             "warn": warn_text,
             "level": lv,
             "warn_blue": warn["blue"] if warn else None,
@@ -189,6 +287,24 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 f"取自{where}最近有效格点（{slo}°E, {sla}°N，距目标点约 {dist} km）。"
             )
 
+    # 摘要措辞：严格区分"最高总水位"与"最大风暴增水"，避免两个量混在一起
+    max_surge_cm = geo.get("max_surge_cm", 0.0)
+    if is_total_level:
+        max_total_cm = max((s.get("max_total_cm") or 0) for s in stations) if stations else max_cm
+        summary_txt = (
+            f"受台风过程影响，{region}沿岸将出现最高约 {max_total_cm:.0f} 厘米的风暴潮总水位过程"
+            f"（天文潮叠加风暴增水，最大风暴增水 {max_surge_cm:.0f} 厘米），"
+            f"最高总水位出现在{peak_site}（{peak_time}），"
+            f"预警级别为{_warn_level_text(level)}。"
+        )
+    else:
+        summary_txt = (
+            f"受台风过程影响，{region}将出现{max_cm:.0f}厘米左右的"
+            f"风暴增水过程{tw_text}，"
+            f"过程最大增水出现在{peak_site}（{peak_time}），"
+            f"预警级别为{_warn_level_text(level)}。"
+        )
+
     brief_data = {
         "template_type": "storm_surge_alert",
         "agency": "自然资源部厦门海洋预报台",
@@ -197,12 +313,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         "number": "",
         "signer": "",
         "basis": "《自然资源部厦门海洋中心海洋灾害应急执行预案（风暴潮、海浪、海啸）》",
-        "summary": (
-            f"受台风过程影响，{region}将出现{max_cm:.0f}厘米左右的"
-            f"{'风暴潮水位' if is_total_level else '风暴增水'}过程{tw_text}，"
-            f"过程最大{'水位' if is_total_level else '增水'}出现在{peak_site}（{peak_time}），"
-            f"预警级别为{_warn_level_text(level)}。"
-        ),
+        "summary": summary_txt,
         "data_range": _data_range_text(ctx, geo),
         "stations": stations,
         "notice": "请沿海各有关单位密切关注我台后续风暴潮预警报。",
@@ -214,8 +325,12 @@ def run(ctx: ModuleContext) -> ModuleContext:
             + ("该点为任意采样点，无本站四色警戒潮位，故按风暴增水分级判定。"
                if is_point else
                "表中警戒潮位为该站85黄零基准的四色警戒值。")
+            + ("总水位取自数值场（潮驱动与风+潮驱动相减得增水、相加即总水位），"
+               "其基准面与警戒潮位的85黄零基准是否一致尚待核实，故判级结论具参照性。"
+               if is_total_level and (geo.get("tide_total") or {}).get("points") else "")
             + "最终判级以厦门中心业务化运行结果为准。"
             + (f"\n{point_note}" if point_note else "")
+            + _extra_note(geo)
         ),
         "targets": "市委办、市政府办、市防汛办",
         "contact": "陶小琴",

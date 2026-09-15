@@ -368,10 +368,16 @@ def _read_point(ds, var: str, lon2, lat2, lon: float, lat: float):
 # ⑤ 天文潮 + 总水位（裁剪场，按点采样）
 # --------------------------------------------------------------------------- #
 def load_tide_total(typhoon: str, points: List[Dict[str, Any]],
-                    prefer: str = "cropped") -> Optional[Dict[str, Any]]:
+                    prefer: str = "cropped",
+                    ref: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """从裁剪场（或正交场）读**天文潮**与**总水位**，并在指定点集上采样。
 
     points: [{"name": "厦门", "lon": 118.25, "lat": 24.50}, ...]
+    ref:    可选的参考序列 {"series": [...], "start_dt": datetime, "name": "厦门"}
+            —— 裁剪场的时间轴没有 units 属性，基准日只能猜；
+            这里用"相减得到的增水"与参考站的增水序列做互相关，求出真实时移，
+            把时间轴对齐到可靠的参考轴上。
+
     返回 {"start_dt","step_hours","points":[{..,"series_tide_cm","series_total_cm","series_surge_cm"}]}
     """
     import xarray as xr
@@ -396,7 +402,8 @@ def load_tide_total(typhoon: str, points: List[Dict[str, Any]],
         base, step = _time_axis(d0, base_hint=_window_hint(typhoon))
         res: Dict[str, Any] = {"start_dt": base, "step_hours": step, "points": [],
                                "source_kind": "裁剪场 output_0(天文潮) + output_4(总水位)",
-                               "src_paths": [os.path.basename(lp0), os.path.basename(lp4)]}
+                               "src_paths": [os.path.basename(lp0), os.path.basename(lp4)],
+                               "time_axis_reliable": False}
         for pt in points:
             a0, j, i, dist = _read_point(d0, "elev", lon2, lat2, pt["lon"], pt["lat"])
             a4, _j2, _i2, _d2 = _read_point(d4, "elev", lon2, lat2, pt["lon"], pt["lat"])
@@ -412,6 +419,38 @@ def load_tide_total(typhoon: str, points: List[Dict[str, Any]],
                 "series_total_cm": [round(float(v), 1) if np.isfinite(v) else None for v in a4],
                 "series_surge_cm": [round(float(v), 1) if np.isfinite(v) else None for v in (a4 - a0)],
             })
+
+        # 用参考序列做互相关，校正时间基准
+        if ref and ref.get("series") and res["points"]:
+            best = None
+            rser = np.asarray([np.nan if v is None else v for v in ref["series"]], dtype=float)
+            for p in res["points"]:
+                if p["name"] != ref.get("name"):
+                    continue
+                fser = np.asarray([np.nan if v is None else v for v in p["series_surge_cm"]], dtype=float)
+                m = min(rser.size, fser.size)
+                if m < 48:
+                    continue
+                r0, f0 = rser[:m], fser[:m]
+                for lag in range(-72, 73):
+                    if lag >= 0:
+                        a, b = f0[lag:], r0[: m - lag]
+                    else:
+                        a, b = f0[: m + lag], r0[-lag:]
+                    ok = np.isfinite(a) & np.isfinite(b)
+                    if ok.sum() < 24:
+                        continue
+                    c = float(np.corrcoef(a[ok], b[ok])[0, 1])
+                    if best is None or c > best[0]:
+                        best = (c, lag)
+            if best and best[0] > 0.5:
+                _c, lag = best
+                # 场的时间轴基准 = 参考序列起点 - lag 小时
+                res["start_dt"] = ref["start_dt"] - datetime.timedelta(hours=lag)
+                res["time_axis_reliable"] = True
+                res["align_corr"] = round(float(best[0]), 3)
+                res["align_lag_h"] = int(lag)
+
         d0.close()
         d4.close()
         return res

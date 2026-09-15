@@ -58,10 +58,62 @@ def _classify(name: str, rel: str = "") -> str:
     return "other"
 
 
+def _ftp_typhoon_id(request: Dict[str, Any]) -> str:
+    """请求里是否点名了 FTP 上数据完整的台风（返回 4 位台风号，否则空串）。"""
+    m = re.search(r"(\d{4})", str(request.get("typhoon", "") or ""))
+    if not m:
+        return ""
+    ty = m.group(1)
+    try:
+        from . import ftp_typhoon as _fty
+        return ty if _fty.is_complete(ty) else ""
+    except Exception:
+        return ""
+
+
+def _ftp_window(sources: Dict[str, Any]) -> str:
+    """从 FTP 数据源里拼一个可读的数据时间窗描述。"""
+    for key in ("surge_field", "station_surge"):
+        src = sources.get(key) or {}
+        for f in (src.get("files") or []):
+            m = re.search(r"(\d{8})-(\d{8})", f.get("name", ""))
+            if m:
+                return f"{m.group(1)}~{m.group(2)}"
+        if src.get("stations"):
+            dates = sorted({d["date"] for v in src["stations"].values() for d in v})
+            if dates:
+                return f"{dates[0]}~{dates[-1]}"
+    return ""
+
+
 def run(ctx: ModuleContext) -> ModuleContext:
     region = ctx.request.get("region", "未知海域")
     tw = ctx.request.get("time_window", "未指定")
     req_ty = str(ctx.request.get("typhoon", "") or "").strip()
+
+    # ⭐⭐ 台风期间数据（FTP 按需取数）：点名了 FTP 上数据完整的台风时优先走这条路径。
+    #      不落地全量数据，只按需拉小文件（站点增水 8.5KB/天、全场 2MB、实测 1.4MB …）
+    ftp_ty = _ftp_typhoon_id(ctx.request)
+    if ftp_ty:
+        try:
+            from orchestrator import ftp_catalog as _fcat
+
+            cat = _fcat.catalog(ftp_ty)
+            srcs = cat.get("sources", {})
+            if srcs:
+                ctx.files["ftp_typhoon"] = ftp_ty
+                ctx.results["meta"] = {
+                    "status": "ftp",
+                    "root": "FTP://课题数据库",
+                    "typhoon": f"typhoon_{ftp_ty}",
+                    "request_typhoon": ftp_ty,
+                    "ftp_sources": sorted(srcs.keys()),
+                    "data_window": _ftp_window(srcs),
+                }
+                return ctx
+        except Exception as e:  # noqa: BLE001
+            # FTP 不可用时静默回退到本地数据路径
+            ctx.results["meta"] = {"status": "ftp_failed", "error": str(e)[:120]}
 
     root = data_root()
     found = scan(root)

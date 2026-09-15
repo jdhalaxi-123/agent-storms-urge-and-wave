@@ -999,6 +999,15 @@ def run(ctx: ModuleContext) -> ModuleContext:
     hours = _parse_window_hours(ctx.request.get("time_window", ""))
     target_date = _parse_target_date(ctx.request.get("date", ""))
 
+    # ⭐⭐⭐ 台风期间数据（FTP 按需取数）—— 点名了 FTP 上的完整台风时优先
+    ftp_ty = ctx.files.get("ftp_typhoon")
+    if ftp_ty:
+        geo = _run_ftp_typhoon(ctx, str(ftp_ty), region, target_date)
+        if geo and geo.get("sites"):
+            ctx.results["geo_stats"] = geo
+            _attach_wave(ctx)
+            return ctx
+
     # ⭐⭐ 任意经纬度/任意地名：按点采样（优先级最高）
     pt = _point_from_request(ctx.request)
     if pt:
@@ -1049,6 +1058,137 @@ def run(ctx: ModuleContext) -> ModuleContext:
     ctx.results["geo_stats"] = {"status": "no_data", "source": "none", "sites": [], "series": []}
     _attach_wave(ctx)
     return ctx
+
+
+# --------------------------------------------------------------------------- #
+# ④ 台风期间数据（FTP 按需取数）
+# --------------------------------------------------------------------------- #
+def _run_ftp_typhoon(ctx: ModuleContext, typhoon: str, region: str,
+                     target_date: Optional[datetime.date] = None) -> Optional[Dict[str, Any]]:
+    """从 FTP 拉取该台风期间的数据并组装成站点结构。
+
+    取数优先级（体积从小到大）：
+        ① 站点纯增水 8.5 KB/天 × 4 站  —— 站点点名时用它（最快）
+        ② 全场增水   2 MB              —— 需要空间分布/任意点时用它
+        ③ 天文潮+总水位 37~117 MB ×2   —— 需要"总水位对照警戒潮位"判级时用它
+        ④ 实测       1.4 MB            —— 附带给出实测对比
+    """
+    from . import ftp_typhoon as fty
+
+    region = str(region or "")
+    # 命中的站点（request 里点名了哪个站）
+    hit = [cn for cn, aliases in STATION_ALIASES.items()
+           if any(a and a.lower() in region.lower() for a in aliases)]
+    want_stations = hit if hit else list(fty.STATIONS.keys())
+
+    sites: List[Dict[str, Any]] = []
+    src_kind = ""
+    src_file = ""
+
+    # ① 站点增水（最小最快）
+    st = fty.load_station_surge(typhoon, stations=want_stations)
+    if st:
+        src_kind = "ftp_station"
+        src_file = f"FTP /group3/storm_surge_point/new_wind_v2/typhoon_{typhoon}/"
+        for s in st:
+            ser = [v for v in s["series_cm"]]
+            if not any(v is not None for v in ser):
+                continue
+            arr = np.asarray([np.nan if v is None else v for v in ser], dtype=float)
+            sites.append({
+                "name": s["name"], "short": s["name"], "code": s.get("code", ""),
+                "lon": s.get("lon"), "lat": s.get("lat"),
+                "start_dt": s.get("start_dt"),
+                "series_cm": arr.tolist(),
+                "series_full": _fill_gaps(arr).tolist(),
+                "source_file": src_file,
+                "data_kind": "站点纯增水（FTP 单点）",
+            })
+
+    # ② 没有站点数据（或问的不是本站点）→ 用全场增水按点采样
+    if not sites:
+        fld = fty.load_surge_field(typhoon, target_date)
+        if fld:
+            src_kind = "ftp_field"
+            src_file = f"FTP /group3/storm_surge_field/typhoon_{typhoon}/{fld['source_file']}"
+            # 目标点：优先用 geo_domain 的坐标，否则取 4 个本站
+            pts = []
+            if ctx.request.get("point"):
+                try:
+                    lo, la = ctx.request["point"][0], ctx.request["point"][1]
+                    label = str(ctx.request.get("point_name") or f"{lo:.2f}°E,{la:.2f}°N")
+                    pts.append({"name": label, "lon": float(lo), "lat": float(la)})
+                except Exception:
+                    pass
+            if not pts:
+                pts = [{"name": n, "lon": v["lon"], "lat": v["lat"]} for n, v in fty.STATIONS.items()]
+            # 用最近格点的最大增水构造站点行
+            for p in pts:
+                sp = fty.sample_field(fld, p["lon"], p["lat"])
+                if sp.get("max_surge_cm") is None:
+                    continue
+                sites.append({
+                    "name": p["name"], "short": p["name"], "code": "",
+                    "lon": p["lon"], "lat": p["lat"],
+                    "grid_lon": sp["grid_lon"], "grid_lat": sp["grid_lat"],
+                    "grid_dist_km": sp["dist_km"],
+                    "start_dt": fld.get("start_dt"),
+                    "max_surge_cm": sp["max_surge_cm"],
+                    "series_cm": [], "series_full": [],
+                    "source_file": src_file,
+                    "data_kind": "全场增水按点采样（FTP 课题三场 2MB）",
+                })
+
+    if not sites:
+        return None
+
+    geo = _finalize(sites, region, src_kind or "ftp_station", src_file)
+    geo["ftp_typhoon"] = typhoon
+    geo["data_source"] = "FTP 课题数据库"
+
+    # ③ 天文潮 + 总水位（用于"总水位对照警戒潮位"判级）
+    station_pts = [{"name": s["name"], "lon": s["lon"], "lat": s["lat"]}
+                   for s in sites if s.get("lon") is not None and s["name"] in fty.STATIONS]
+    if station_pts:
+        try:
+            # 用站点增水序列做时间基准对齐（裁剪场没有 units 属性）
+            ref = None
+            for s in sites:
+                if s["name"] == station_pts[0]["name"] and s.get("series_cm"):
+                    ref = {"name": s["name"], "series": s["series_cm"],
+                           "start_dt": s.get("start_dt")}
+                    break
+            tt = fty.load_tide_total(typhoon, station_pts, ref=ref)
+            if tt:
+                geo["tide_total"] = tt
+        except Exception:
+            pass
+
+    # ④ 实测对比
+    try:
+        ob = fty.load_observation(typhoon)
+        if ob:
+            geo["observation"] = {
+                "start_dt": str(ob.get("start_dt") or ""),
+                "wave_H_max": ob.get("wave_H_max"),
+                "tide_tide_max": ob.get("tide_tide_max"),
+                "n_buoy": len(ob.get("sta_id") or []),
+                "n_tide": len(ob.get("sta_id_tide") or []),
+                "source_kind": ob.get("source_kind"),
+            }
+    except Exception:
+        pass
+
+    # ⑤ 浮标波高过程（波高问得最多，顺手带上）
+    try:
+        if str(ctx.request.get("disaster", "")) == "wave" or str(ctx.request.get("plot", "")) == "wave":
+            wp = fty.load_wave_point(typhoon)
+            if wp:
+                geo["wave_points"] = wp[:16]
+    except Exception:
+        pass
+
+    return geo
 
 
 def _attach_wave(ctx: ModuleContext) -> None:
