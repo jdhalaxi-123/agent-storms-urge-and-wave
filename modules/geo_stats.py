@@ -1005,7 +1005,9 @@ def run(ctx: ModuleContext) -> ModuleContext:
         geo = _run_ftp_typhoon(ctx, str(ftp_ty), region, target_date)
         if geo and geo.get("sites"):
             ctx.results["geo_stats"] = geo
-            _attach_wave(ctx)
+            # FTP 路径下若已从浮标站取到波高，就不再走本地 M1/R1 海浪
+            if not (ctx.results.get("wave_stats") or {}).get("status") == "ok":
+                _attach_wave(ctx)
             return ctx
 
     # ⭐⭐ 任意经纬度/任意地名：按点采样（优先级最高）
@@ -1179,14 +1181,43 @@ def _run_ftp_typhoon(ctx: ModuleContext, typhoon: str, region: str,
     except Exception:
         pass
 
-    # ⑤ 浮标波高过程（波高问得最多，顺手带上）
-    try:
-        if str(ctx.request.get("disaster", "")) == "wave" or str(ctx.request.get("plot", "")) == "wave":
+    # ⑤ 浮标波高过程（FTP：16 个浮标站，10~16 KB/站）
+    want_wave = (str(ctx.request.get("disaster", "")) == "wave"
+                 or str(ctx.request.get("plot", "")).lower() == "wave")
+    if want_wave:
+        try:
             wp = fty.load_wave_point(typhoon)
             if wp:
-                geo["wave_points"] = wp[:16]
-    except Exception:
-        pass
+                geo["wave_points"] = [{k: v for k, v in r.items() if k != "series_m"}
+                                      for r in wp[:16]]
+                # 直接构造 wave_stats（地形/测站数据自带时间轴与波高序列）
+                top = wp[0]
+                raw_ser = top.get("series_m") or []
+                ser = [v for v in raw_ser if v is not None]
+                if ser:
+                    step = top.get("step_hours") or 1
+                    # 峰值下标要在**原始序列**上取，避免剔除 None 后错位
+                    idx_of_max = max(range(len(raw_ser)), key=lambda k: (raw_ser[k] is not None, raw_ser[k] or -1))
+                    ctx.results["wave_stats"] = {
+                        "status": "ok",
+                        "source": f"FTP 浮标站 {top.get('station')}",
+                        "file": top.get("source_file", ""),
+                        "max_hs_m": top.get("max_hs_m"),
+                        "level": fty.judge_wave(top.get("max_hs_m") or 0),
+                        "peak_idx": idx_of_max,
+                        "peak_time": (top["start_dt"] + datetime.timedelta(hours=idx_of_max * step)
+                                      ).strftime("%Y-%m-%d %H:%M") if top.get("start_dt") else "",
+                        "series": [round(float(v), 2) if v is not None else None
+                                   for v in raw_ser[:: max(1, len(raw_ser) // 30)]],
+                        "series_full": [round(float(v), 2) if v is not None else None for v in raw_ser],
+                        "start_dt": top.get("start_dt"),
+                        "station": top.get("station"),
+                        "n_stations": len(wp),
+                        "time_window_hours": None,
+                    }
+                    geo["wave_station"] = top.get("station")
+        except Exception as e:  # noqa: BLE001
+            print(f"[ftp_typhoon] 读浮标波高失败: {e}")
 
     return geo
 
@@ -1266,8 +1297,11 @@ def run_wave(ctx: ModuleContext, hours: Optional[int] = None) -> Dict[str, Any]:
             continue
         try:
             hs = ds["hs"]
+            hs_np = np.asarray(hs.values, dtype=float)     # 布尔索引必须用 ndarray
             alon = ds["alon"].values if "alon" in ds.variables else ds["lon"].values
             alat = ds["alat"].values if "alat" in ds.variables else ds["lat"].values
+            alon = np.asarray(alon, dtype=float)
+            alat = np.asarray(alat, dtype=float)
             if pt:
                 # —— 任意点采样：取"离点最近且波高有效"的格点（排除陆地/全 0 格点）——
                 lonv = ds["lon"].values if "lon" in ds.variables else np.asarray(alon).ravel()
@@ -1320,14 +1354,19 @@ def run_wave(ctx: ModuleContext, hours: Optional[int] = None) -> Dict[str, Any]:
                 # 该文件不含有效数据 → 换下一个文件
                 continue
             # —— 默认：目标海域海域最大 ——
-            if np.asarray(alon).ndim == 1:
-                mask = ((alon >= WAVE_BOX[0]) & (alon <= WAVE_BOX[1]))[:, None] & \
-                       ((alat >= WAVE_BOX[2]) & (alat <= WAVE_BOX[3]))[None, :]
-                sel = hs[:, mask]
+            if alon.ndim == 1:
+                # 一维坐标：mask 形状 (nlon, nlat)。需与 hs 的 (time, lat, lon) 对轴
+                m_lon = (alon >= WAVE_BOX[0]) & (alon <= WAVE_BOX[1])
+                m_lat = (alat >= WAVE_BOX[2]) & (alat <= WAVE_BOX[3])
+                sel = hs_np[:, m_lat, :][:, :, m_lon]
             else:
-                mask = (alon >= WAVE_BOX[0]) & (alon <= WAVE_BOX[1]) & (alat >= WAVE_BOX[2]) & (alat <= WAVE_BOX[3])
-                sel = hs[:, mask]
-            daily = np.nanmax(sel, axis=1)
+                mask = (alon >= WAVE_BOX[0]) & (alon <= WAVE_BOX[1]) & \
+                       (alat >= WAVE_BOX[2]) & (alat <= WAVE_BOX[3])
+                sel = hs_np[:, mask]
+            if sel.size == 0:
+                ds.close()
+                continue
+            daily = np.nanmax(sel.reshape(sel.shape[0], -1), axis=1)
             valid = daily[~np.isnan(daily)]
             if len(valid):
                 full_series.extend(float(v) for v in valid)

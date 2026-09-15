@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -355,17 +356,63 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
     # 海浪评估（若已统计）
     wave = ctx.results.get("wave_stats", {}) or {}
+    want_wave = str(ctx.request.get("disaster", "") or "") == "wave"
     if wave.get("status") == "ok":
         wl = wave.get("level", "无")
         wtext = "未达到预警阈值" if wl == "无" else f"{wl}预警"
         w_region = geo.get("point_name") or region
-        brief_data["summary"] += (
-            f"\n\n同时，受台风影响，{w_region}近岸海域将出现{wave.get('max_hs_m', 0):.1f}米的大浪过程，"
-            f"海浪预警级别为{wtext}。"
-        )
+        hs = wave.get("max_hs_m", 0) or 0
         ctx.results["assess"]["wave"] = {
             "max_hs_m": wave.get("max_hs_m"),
             "level": wl,
             "peak_time": wave.get("peak_time"),
         }
+        if want_wave:
+            # 用户问的是海浪 —— 直接把简报切换为**海浪警报/消息**模板，
+            # 不再拿风暴潮的标题和表格来搪塞
+            lvl_word = "未达到预警级别" if wl == "无" else f"{wl}预警"
+            wst = wave.get("station")            # FTP 浮标站号（若有）
+            # 浮标站缺经纬度对照，不能把台湾浮标的浪高说成"崇武近岸"
+            w_label = f"浮标站 {wst}" if wst else w_region
+            brief_data["template_type"] = "wave_alert" if wl != "无" else "wave_message"
+            brief_data["title"] = f"{w_region}海浪{'警报' if wl != '无' else '消息'}"
+            brief_data["summary"] = (
+                f"受台风过程影响，{w_label} 出现 {hs:.1f} 米左右的有效波高过程，"
+                f"峰值时刻 {wave.get('peak_time') or '（未标注）'}，海浪预警级别为{lvl_word}。"
+            )
+            brief_data["segments"] = [{
+                "region": w_label,
+                "description": f"有效波高最大约 {hs:.1f} 米",
+                "level": lvl_word,
+            }]
+            # 海浪简报不展示潮位×警戒潮位表
+            brief_data["stations"] = []
+            wsrc = str(wave.get("source") or wave.get("file") or "海浪场")
+            note_lines = [
+                f"注：本简报为海浪预报，判级标准为「有效波高分级」"
+                f"（蓝色2.5m / 黄色4.0m / 橙色6.0m / 红色9.0m）；"
+                f"浪高数据取自 {wsrc}（{os.path.basename(str(wave.get('file') or ''))}）。"
+            ]
+            if wst:
+                note_lines.append(
+                    f"浮标波浪数据共 {wave.get('n_stations', '?')} 个站，此处给出本台风期间"
+                    f"浪高最大的站（{wst}）。**该批浮标站在文件中只有站号、没有经纬度**，"
+                    f"无法与「{region}」直接对应，故请按站号理解该结论。"
+                )
+            note_lines.append("最终判级以厦门中心业务化运行结果为准。")
+            brief_data["note"] = "".join(note_lines)
+        else:
+            brief_data["summary"] += (
+                f"\n\n同时，受台风影响，{w_region}近岸海域将出现{hs:.1f}米的大浪过程，"
+                f"海浪预警级别为{wtext}。"
+            )
+    elif want_wave:
+        # 只要海浪、却没取到海浪数据 —— 如实说明，不要拿风暴潮充数
+        brief_data["summary"] = (
+            f"暂未取到 {region} 的海浪（有效波高）数据，无法给出海浪预报结论。"
+            f"可尝试：换一个台风编号（数据完整的 10 个：1513、1521、1601、1614、1617、"
+            f"1709、1808、2305、2311、2403），或换个海域，或改用风暴潮查询。"
+        )
+        brief_data["title"] = f"{region}海浪预报（无数据）"
+        brief_data["stations"] = []
     return ctx
