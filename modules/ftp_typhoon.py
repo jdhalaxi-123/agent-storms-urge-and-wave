@@ -45,6 +45,10 @@ STATIONS: Dict[str, Dict[str, Any]] = {
 }
 CODE2CN = {v["code"]: k for k, v in STATIONS.items()}
 
+# 单个文件超过此大小就**不自动下载**（正交场 710/921 MB、波浪场 2.7 GB 等）
+# —— 按需取数的前提是"秒级可得"，超大文件必须显式确认后才下。
+MAX_AUTO_DOWNLOAD_MB = 150.0
+
 
 # --------------------------------------------------------------------------- #
 # 工具
@@ -385,8 +389,14 @@ def load_tide_total(typhoon: str, points: List[Dict[str, Any]],
     cat = fc.catalog(typhoon)
     s = cat.get("sources", {})
     src = s.get("cropped_field") if prefer == "cropped" else None
-    src = src or s.get("ortho_field") or s.get("cropped_field")
+    src = src or s.get("cropped_field") or s.get("ortho_field")
     if not src or not src.get("tide") or not src.get("total"):
+        return None
+    # 超大文件（正交场 710/921 MB）不自动下载 —— 否则一次查询要等好几分钟
+    biggest = max(src.get("tide_size", 0), src.get("total_size", 0)) / 1e6
+    if biggest > MAX_AUTO_DOWNLOAD_MB:
+        print(f"[ftp_typhoon] {typhoon} 无裁剪场，正交场单文件 {biggest:.0f} MB "
+              f"超过自动下载上限 {MAX_AUTO_DOWNLOAD_MB:.0f} MB，跳过总水位判级")
         return None
     lp0 = fc.fetch(src["tide"], expected_size=src.get("tide_size", 0))
     lp4 = fc.fetch(src["total"], expected_size=src.get("total_size", 0))

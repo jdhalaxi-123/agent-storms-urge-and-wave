@@ -59,16 +59,19 @@ def _classify(name: str, rel: str = "") -> str:
 
 
 def _ftp_typhoon_id(request: Dict[str, Any]) -> str:
-    """请求里是否点名了 FTP 上数据完整的台风（返回 4 位台风号，否则空串）。"""
+    """请求里是否点名了台风编号（返回 4 位台风号，否则空串）。
+
+    注意：这里**只取编号**；是否走 FTP 由 run() 查数据地图后决定 ——
+    只要该台风在 FTP 上有可用数据源（站点增水/全场增水/裁剪场/实测）就走 FTP，
+    不再限定"数据完整的 10 个"。
+    """
     m = re.search(r"(\d{4})", str(request.get("typhoon", "") or ""))
-    if not m:
-        return ""
-    ty = m.group(1)
-    try:
-        from . import ftp_typhoon as _fty
-        return ty if _fty.is_complete(ty) else ""
-    except Exception:
-        return ""
+    return m.group(1) if m else ""
+
+
+# 走 FTP 至少需要其中一类数据源
+FTP_USABLE_KEYS = ("station_surge", "surge_field", "cropped_field", "observation_qc",
+                   "ortho_field", "irregular_mesh", "ensemble_surge")
 
 
 def _ftp_window(sources: Dict[str, Any]) -> str:
@@ -91,7 +94,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
     tw = ctx.request.get("time_window", "未指定")
     req_ty = str(ctx.request.get("typhoon", "") or "").strip()
 
-    # ⭐⭐ 台风期间数据（FTP 按需取数）：点名了 FTP 上数据完整的台风时优先走这条路径。
+    # ⭐⭐ 台风期间数据（FTP 按需取数）：点名台风且 FTP 上有可用数据源时优先走这条路径。
     #      不落地全量数据，只按需拉小文件（站点增水 8.5KB/天、全场 2MB、实测 1.4MB …）
     ftp_ty = _ftp_typhoon_id(ctx.request)
     if ftp_ty:
@@ -100,7 +103,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
             cat = _fcat.catalog(ftp_ty)
             srcs = cat.get("sources", {})
-            if srcs:
+            usable = [k for k in FTP_USABLE_KEYS if k in srcs]
+            if usable:
                 ctx.files["ftp_typhoon"] = ftp_ty
                 ctx.results["meta"] = {
                     "status": "ftp",
@@ -108,6 +112,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
                     "typhoon": f"typhoon_{ftp_ty}",
                     "request_typhoon": ftp_ty,
                     "ftp_sources": sorted(srcs.keys()),
+                    "ftp_usable": sorted(usable),
                     "data_window": _ftp_window(srcs),
                 }
                 return ctx

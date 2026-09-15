@@ -1086,6 +1086,7 @@ def _run_ftp_typhoon(ctx: ModuleContext, typhoon: str, region: str,
     sites: List[Dict[str, Any]] = []
     src_kind = ""
     src_file = ""
+    ft_surge_field: Dict[str, Any] = {}
 
     # ① 站点增水（最小最快）
     st = fty.load_station_surge(typhoon, stations=want_stations)
@@ -1111,6 +1112,7 @@ def _run_ftp_typhoon(ctx: ModuleContext, typhoon: str, region: str,
     if not sites:
         fld = fty.load_surge_field(typhoon, target_date)
         if fld:
+            ft_surge_field = fld
             src_kind = "ftp_field"
             src_file = f"FTP /group3/storm_surge_field/typhoon_{typhoon}/{fld['source_file']}"
             # 目标点：优先用 geo_domain 的坐标，否则取 4 个本站
@@ -1148,6 +1150,21 @@ def _run_ftp_typhoon(ctx: ModuleContext, typhoon: str, region: str,
     geo["ftp_typhoon"] = typhoon
     geo["data_source"] = "FTP 课题数据库"
 
+    # 场采样得到的站点没有逐时序列 → 数据范围用场的时段补齐（否则只显示一个瞬间）
+    if not any(s.get("series_full") for s in sites):
+        fld = ft_surge_field or {}
+        n_h, st_h = fld.get("n_hours"), fld.get("step_hours") or 1
+        if geo.get("data_start") and n_h:
+            try:
+                d0 = datetime.datetime.strptime(geo["data_start"], "%Y-%m-%d %H:%M")
+                geo["data_end"] = (d0 + datetime.timedelta(hours=(n_h - 1) * st_h)).strftime("%Y-%m-%d %H:%M")
+                geo["data_span_note"] = f"全场增水共 {n_h} 个时次（{st_h:g} 小时间隔）"
+            except Exception:
+                pass
+        if fld.get("peak_dt"):
+            geo["peak_time"] = fld["peak_dt"].strftime("%m-%d %H:%M")
+            geo["peak_date"] = fld["peak_dt"].strftime("%Y-%m-%d")
+
     # ③ 天文潮 + 总水位（用于"总水位对照警戒潮位"判级）
     station_pts = [{"name": s["name"], "lon": s["lon"], "lat": s["lat"]}
                    for s in sites if s.get("lon") is not None and s["name"] in fty.STATIONS]
@@ -1163,6 +1180,28 @@ def _run_ftp_typhoon(ctx: ModuleContext, typhoon: str, region: str,
             tt = fty.load_tide_total(typhoon, station_pts, ref=ref)
             if tt:
                 geo["tide_total"] = tt
+                # ⭐ 数据范围取各数据源窗口的**并集**：
+                #    站点增水(课题三)与总水位场(裁剪场)窗口不同，
+                #    否则会出现"峰值时刻 07-14 但数据范围只到 07-13"的自相矛盾。
+                spans = []
+                try:
+                    d0 = datetime.datetime.strptime(geo.get("data_start", ""), "%Y-%m-%d %H:%M")
+                    d1 = datetime.datetime.strptime(geo.get("data_end", ""), "%Y-%m-%d %H:%M")
+                    spans.append(("站点增水", d0, d1))
+                except Exception:
+                    pass
+                n_tt = max((len(p.get("series_total_cm") or []) for p in tt.get("points", [])),
+                           default=0)
+                if tt.get("start_dt") and n_tt:
+                    step = tt.get("step_hours") or 1
+                    spans.append(("总水位场", tt["start_dt"],
+                                  tt["start_dt"] + datetime.timedelta(hours=(n_tt - 1) * step)))
+                if spans:
+                    lo = min(s[1] for s in spans)
+                    hi = max(s[2] for s in spans)
+                    geo["data_start"] = lo.strftime("%Y-%m-%d %H:%M")
+                    geo["data_end"] = hi.strftime("%Y-%m-%d %H:%M")
+                    geo["data_spans"] = [f"{s[0]} {s[1]:%m-%d %H:%M}~{s[2]:%m-%d %H:%M}" for s in spans]
         except Exception:
             pass
 

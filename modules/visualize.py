@@ -222,7 +222,9 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
     except Exception:
         pass
     if len(sites) > 1:
-        ax.legend(loc="upper left", fontsize=7, framealpha=0.8)
+        handles, labels = ax.get_legend_handles_labels()
+        if labels:                      # 无带标签的曲线时不画图例（否则 matplotlib 会告警）
+            ax.legend(handles, labels, loc="upper left", fontsize=7, framealpha=0.8)
     ax.grid(False)  # 项目组风格: 无网格
     fig.tight_layout(pad=0.8)
     fig.savefig(path, bbox_inches="tight")
