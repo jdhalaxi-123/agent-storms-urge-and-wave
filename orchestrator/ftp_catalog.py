@@ -283,15 +283,35 @@ def best_source(cat: Dict[str, Any], want: str) -> Optional[Dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # 按需下载 + 缓存
 # --------------------------------------------------------------------------- #
+def cache_path(remote: str) -> Path:
+    """把远程路径映射成**唯一**的本地缓存文件名。
+
+    注意：不能只用 basename —— 不同台风的文件常常同名（`output_0.nc`、`output_4.nc`），
+    只取 basename 会互相覆盖，导致每次查询都重新下载上百 MB。
+    """
+    parts = [p for p in str(remote).strip("/").split("/") if p]
+    safe = "__".join(parts).replace(":", "_").replace("*", "_").replace("?", "_")
+    return CACHE_DIR / safe
+
+
 def fetch(remote: str, force: bool = False, expected_size: int = 0, quiet: bool = True) -> Optional[str]:
     """把远程文件下到本地缓存，返回本地路径；已存在且大小一致则直接复用。"""
     if not remote:
         return None
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    local = CACHE_DIR / os.path.basename(remote)
+    local = cache_path(remote)
     if local.exists() and not force:
         if not expected_size or abs(local.stat().st_size - expected_size) < 1024:
             return str(local)
+    # 兼容旧版缓存（只有 basename）：命中且大小一致就改名复用，省一次下载
+    legacy = CACHE_DIR / os.path.basename(remote)
+    if legacy.exists() and legacy != local and not force:
+        if not expected_size or abs(legacy.stat().st_size - expected_size) < 1024:
+            try:
+                legacy.rename(local)
+                return str(local)
+            except Exception:
+                return str(legacy)
     try:
         if quiet:
             import contextlib
