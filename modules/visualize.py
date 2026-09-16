@@ -433,9 +433,12 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
             ax.legend(handles, labels, loc="upper left", fontsize=11, framealpha=0.85)
     fig.savefig(path, dpi=150, bbox_inches="tight")
 
-    # 只有**真实站点产品**才按他们的命名存 TIFF（XMN_起_止.tif）；
-    # 模式场格点的曲线不存，免得和老师的同名图混淆。
-    if not is_grid_point:
+    # 只有**真实站点产品**才按他们的命名存 TIFF（XMN_起_止.tif）：
+    #   - 区域查询里的"区域峰值曲线"不是站点产品，不存；
+    #   - 模式场最近格点（如"厦门近岸(模式格点)"）也不是站点产品，不存。
+    region_query = bool(geo.get("field_query"))
+    real_station = (not region_query) and (not is_grid_point)
+    if real_station:
         try:
             tif = OUT_DIR / f"{code}_{st.strftime('%Y%m%d')}_{en.strftime('%Y%m%d')}.tif"
             fig.savefig(tif, dpi=150, format="tiff", bbox_inches="tight")
