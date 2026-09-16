@@ -1008,9 +1008,18 @@ def _run_field_query(ctx: ModuleContext, box: list, region: str) -> Optional[Dic
 
     box = tuple(box) if box else None
     disaster = str(ctx.request.get("disaster", "storm_surge") or "storm_surge")
+    kind_ = "wave" if disaster == "wave" else "surge"
+    # ⭐ 数据时效：每日预报有固定更新时点，先判断"今天的出来没有 / 请求日期是否超范围"
+    try:
+        fresh = ai_daily.date_check(str(ctx.request.get("date", "") or ""), kind=kind_)
+    except Exception:
+        fresh = {}
     date = str(ctx.request.get("date", "") or "")
     m = re.search(r"(\d{4})-?(\d{2})-?(\d{2})", date)
     date = f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else ""
+    # 用户想看的日期尚未更新 → 自动回退到最近一次可用预报
+    if fresh.get("out_of_coverage") and fresh.get("latest_date"):
+        date = fresh["latest_date"]
 
     if disaster == "wave":
         fld = ai_daily.load_wave_field(date)
@@ -1059,11 +1068,105 @@ def _run_field_query(ctx: ModuleContext, box: list, region: str) -> Optional[Dic
     geo["field_source"] = fld.get("source", "")
     geo["field_date"] = fld.get("date", "")
     geo["data_source"] = "课题三 每日人工智能预报"
+    geo["freshness"] = fresh
     if start and len(series):
         geo["data_start"] = start.strftime("%Y-%m-%d %H:%M")
         geo["data_end"] = (start + datetime.timedelta(hours=len(series) - 1)).strftime("%Y-%m-%d %H:%M")
 
     ctx.results["ai_field"] = {"kind": kind, "field": fld, "stats": st, "box": box}
+    return geo
+
+
+# --------------------------------------------------------------------------- #
+# ⑥ 常规（非台风个例）单点查询：课题三每日 AI 预报 + 天文潮 → 总水位
+# --------------------------------------------------------------------------- #
+def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optional[Dict[str, Any]]:
+    """不带台风号的常规查询 → 用**当天的**AI 预报。
+
+    数据链路：
+        单点风暴潮预报（纯增水, cm）  /group3/dailyforecast/storm_surge_point_system/
+      + 天文潮预报（逐时, m→cm）      /group3/dailyforecast/.../tide/{站}_tide_prediction_*.csv
+      = 总水位 → 对照该站四色警戒潮位判级（业务口径）
+    """
+    from . import ai_daily
+
+    # 命中的站点
+    code = None
+    for cn, c in ai_daily.SURGE_STATIONS.items():
+        aliases = STATION_ALIASES.get(cn) or [cn]
+        if any(a and a.lower() in str(region).lower() for a in aliases):
+            code, station_cn = c, cn
+            break
+    if not code:
+        return None
+
+    fresh = ai_daily.date_check(str(ctx.request.get("date", "") or ""), kind="surge")
+    want_date = ""
+    if fresh.get("out_of_coverage") and fresh.get("latest_date"):
+        want_date = fresh["latest_date"]
+
+    ps = ai_daily.load_point_surge(code, want_date)
+    if not ps or not ps.get("series_cm"):
+        return None
+    surge = np.asarray(ps["series_cm"], dtype=float)
+    start = ps["start_dt"]
+
+    # 天文潮（同一天起报的 CSV）
+    tide = None
+    try:
+        tide = ai_daily.load_tide_prediction(code, ps["start_dt"].strftime("%Y%m%d"))
+        if tide is None:
+            tide = ai_daily.load_tide_prediction(code)
+    except Exception:
+        tide = None
+
+    # 与天文潮对齐（按时间戳对齐，而不是按下标）
+    total = None
+    tide_cm = None
+    if tide and tide.get("times"):
+        tmap = {t: v * 100.0 for t, v in zip(tide["times"], tide["tide_m"])}
+        tide_cm = np.full(surge.size, np.nan)
+        for i in range(surge.size):
+            td = start + datetime.timedelta(hours=i)
+            if td in tmap:
+                tide_cm[i] = tmap[td]
+            elif (td.replace(minute=0) if hasattr(td, "replace") else td) in tmap:
+                tide_cm[i] = tmap[td.replace(minute=0)]
+        if np.isfinite(tide_cm).any():
+            total = surge + np.nan_to_num(tide_cm, nan=0.0)
+
+    site = {
+        "name": station_cn, "short": station_cn, "code": code,
+        "lon": None, "lat": None, "start_dt": start,
+        "series_cm": surge.tolist(),
+        "series_full": _fill_gaps(surge).tolist(),
+        "data_kind": "课题三 AI 每日预报 · 单点风暴增水",
+    }
+    geo = _finalize([site], region, "ai_point", ps.get("file", ""))
+    geo["custom_point"] = False
+    geo["ai_daily"] = True
+    geo["freshness"] = fresh
+    geo["data_source"] = "课题三 每日人工智能预报"
+    geo["forecast_date"] = ps["start_dt"].strftime("%Y-%m-%d")
+    geo["forecast_span"] = f"{ps['start_dt']:%Y-%m-%d %H:%M} ~ "
+    if surge.size:
+        geo["forecast_span"] += (start + datetime.timedelta(hours=surge.size - 1)).strftime("%Y-%m-%d %H:%M")
+    if start:
+        geo["data_start"] = start.strftime("%Y-%m-%d %H:%M")
+        geo["data_end"] = (start + datetime.timedelta(hours=surge.size - 1)).strftime("%Y-%m-%d %H:%M")
+
+    # 天文潮 / 总水位（供判级：业务口径用总水位对照警戒潮位）
+    if total is not None:
+        geo["tide_total"] = {
+            "start_dt": start, "step_hours": 1.0,
+            "points": [{
+                "name": station_cn, "lon": None, "lat": None,
+                "series_tide_cm": [None if not np.isfinite(v) else round(float(v), 1) for v in tide_cm],
+                "series_total_cm": [None if not np.isfinite(v) else round(float(v), 1) for v in total],
+                "series_surge_cm": [round(float(v), 1) for v in surge],
+            }],
+            "source_kind": "课题三 AI 单点增水 + 天文潮预报（相加得总水位）",
+        }
     return geo
 
 
@@ -1095,6 +1198,19 @@ def run(ctx: ModuleContext) -> ModuleContext:
             if not (ctx.results.get("wave_stats") or {}).get("status") == "ok":
                 _attach_wave(ctx)
             return ctx
+
+    # ⭐⭐⭐⭐ 常规（非台风个例）单点查询 → 用「当天的」AI 每日预报 + 天文潮
+    if not ctx.files.get("ftp_typhoon") and not ctx.request.get("field_query"):
+        if str(ctx.request.get("disaster", "")) != "wave":
+            try:
+                geo = _run_ai_point_query(ctx, region, target_date)
+                if geo and geo.get("sites"):
+                    ctx.results["geo_stats"] = geo
+                    if not (ctx.results.get("wave_stats") or {}).get("status") == "ok":
+                        _attach_wave(ctx)
+                    return ctx
+            except Exception as e:  # noqa: BLE001
+                print(f"[geo_stats] AI 单点查询失败: {e}")
 
     # ⭐⭐ 任意经纬度/任意地名：按点采样（优先级最高）
     pt = _point_from_request(ctx.request)

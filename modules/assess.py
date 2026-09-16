@@ -98,6 +98,15 @@ def judge_by_warn_level(total_level_cm: float, warn: dict) -> str:
 def _extra_note(geo: Dict[str, Any]) -> str:
     """附加上数据来源与实测对比信息（FTP 台风期间数据）。"""
     parts = []
+    # ⭐ 数据时效说明（每日预报有固定更新时点）
+    fresh = geo.get("freshness") or {}
+    ftxt = fresh.get("note_target") or fresh.get("note_today") or ""
+    if ftxt:
+        parts.append(ftxt)
+    if geo.get("ai_daily"):
+        parts.append(f"数据来源：{geo.get('data_source','课题三 每日人工智能预报')}"
+                     f"（起报 {geo.get('forecast_date','')}，"
+                     f"{geo.get('forecast_span','')}）。")
     obs = geo.get("observation") or {}
     if obs:
         bits = []
@@ -179,6 +188,11 @@ def _field_brief(ctx: ModuleContext, geo: dict, region: str) -> Optional[Dict[st
         f"{'有效波高分级（蓝2.5/黄4.0/橙6.0/红9.0 m）' if is_wave else '风暴增水分级（蓝30/黄50/橙80/红120 cm）'}。"
         f"区域内站点位置已在图上标出；如需具体站点的过程曲线，请指定站点名（厦门/崇武/晋江/东山东港）。"
     )
+    # ⭐ 数据时效说明（今天的出来没有 / 请求日期是否超范围）
+    fresh = geo.get("freshness") or {}
+    fresh_txt = fresh.get("note_target") or fresh.get("note_today") or ""
+    if fresh_txt:
+        note = fresh_txt + "\n" + note
     return {
         "template_type": "wave_alert" if is_wave else "storm_surge_alert",
         "agency": "自然资源部厦门海洋预报台",

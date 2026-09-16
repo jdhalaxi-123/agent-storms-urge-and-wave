@@ -339,20 +339,27 @@ def load_tide_prediction(code: str, date: str = "") -> Optional[Dict[str, Any]]:
 # ④ 单点（风暴潮 / 波浪）
 # --------------------------------------------------------------------------- #
 def list_point_surge_files(code: str = "XMN", limit: int = 400) -> List[Dict[str, Any]]:
-    """列单点风暴潮预报文件（storm_surge_forecast_{站}_{起}-{止}.nc）。"""
+    """列单点风暴潮预报文件。
+
+    站文件有**多套命名**，全部要认：
+        storm_surge_forecast_sp_XMN_20260915-20260921.nc   ← 当前（带 sp_）
+        storm_surge_forecast_XMN_20250715-20250721.nc      ← 早期（不带 sp_）
+        storm_surge_forecast_sp_CWU_20250705-20250707_gfs.nc ← gfs 后缀
+    """
+    pat = re.compile(rf"storm_surge_forecast_(?:sp_)?{re.escape(code)}_(\d{{8}})-(\d{{8}})(?:_\w+)?\.nc$")
     out = []
     for e in _ls(POINT_SURGE_DIR):
         if e["dir"]:
             continue
-        m = re.match(rf"storm_surge_forecast_{code}_(\d{{8}})-(\d{{8}})", e["name"])
+        m = pat.match(e["name"])
         if m:
             out.append({"name": e["name"], "path": e["path"], "size": e["size"],
-                        "start": m.group(1), "end": m.group(2)})
+                        "start": m.group(1), "end": m.group(2), "mtime": e.get("mtime", "")})
     return sorted(out, key=lambda x: x["start"])[-limit:]
 
 
 def load_point_surge(code: str = "XMN", date: str = "") -> Optional[Dict[str, Any]]:
-    """读取单点风暴潮预报（7 天滚动，纯增水 cm）。date 为空取最新。"""
+    """读取单点风暴潮预报（7 天滚动，纯增水 cm）。date 为空取**最新起报**。"""
     import xarray as xr
 
     files = list_point_surge_files(code)
@@ -441,6 +448,149 @@ def overview() -> Dict[str, Any]:
         "tide_dates": td[-6:], "tide_latest": td[-1] if td else "", "tide_n": len(td),
         "source": "课题三 /group3/dailyforecast（人工智能方法）",
     }
+
+
+# --------------------------------------------------------------------------- #
+# 数据时效（每日预报有固定更新时点，agent 必须知道"今天的出来没有"）
+# --------------------------------------------------------------------------- #
+# 从 FTP 文件修改时间实测到的每日更新时点（北京时间）
+UPDATE_SCHEDULE = "约 09:00 与 14:40 分批更新"
+
+
+def _latest_mtime(force: bool = False) -> Dict[str, Any]:
+    """取最新一批预报文件的修改时间，用于说明"数据是什么时候出来的"。"""
+    key = "latest_mtime"
+    if not force and key in _mem:
+        return _mem[key]
+    out: Dict[str, Any] = {"surge_field": "", "wave_field": "", "point": ""}
+    dates = list_surge_dates()
+    if dates:
+        sub = f"{SURGE_FIELD_DIR}/atm_forecast_{dates[-1]}"
+        es = [e for e in _ls(sub) if not e["dir"]]
+        if es:
+            out["surge_field"] = max(e.get("mtime", "") for e in es)
+    wd = list_wave_dates()
+    if wd:
+        es = [e for e in _ls(WAVE_FIELD_DIR) if e["name"].startswith(wd[-1])]
+        if es:
+            out["wave_field"] = max(e.get("mtime", "") for e in es)
+    _mem[key] = out
+    return out
+
+
+def _fmt_mtime(mt: str) -> str:
+    """FTP 的 modify 形如 20260915144112.000 -> 2026-09-15 14:41。"""
+    m = re.match(r"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})", str(mt))
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}:{m.group(5)}" if m else ""
+
+
+def update_info(now: Optional[datetime.datetime] = None, kind: str = "surge") -> Dict[str, Any]:
+    """返回每日 AI 预报的**数据时效状态**。
+
+    kind: "surge"（风暴潮场）或 "wave"（海浪场）
+
+    返回：
+        latest_date     最新一次预报的起报日 YYYYMMDD
+        latest_start    该次起报时刻（YYYY-MM-DD 00:00）
+        cover_end       该次预报覆盖到的时刻（起报 + 时长）
+        generated_at    该批文件的实际生成时间（来自 FTP 修改时间）
+        today_ready     今天的预报是否已经发布
+        note            给用户看的时效说明（今天的没出来 / 请求日期超出覆盖）
+    """
+    now = now or datetime.datetime.now()
+    if kind == "wave":
+        dates, hours = list_wave_dates(), 144
+        gen_key = "wave_field"
+    else:
+        dates, hours = list_surge_dates(), 168
+        gen_key = "surge_field"
+    latest = dates[-1] if dates else ""
+    today = now.strftime("%Y%m%d")
+    mt = _latest_mtime().get(gen_key, "")
+
+    info: Dict[str, Any] = {
+        "latest_date": latest, "today": today, "schedule": UPDATE_SCHEDULE,
+        "generated_at": _fmt_mtime(mt), "n_dates": len(dates),
+        "today_ready": bool(latest == today),
+        "hours": hours,
+    }
+    if latest:
+        try:
+            st = datetime.datetime.strptime(latest, "%Y%m%d")
+            info["latest_start"] = st.strftime("%Y-%m-%d %H:%M")
+            info["cover_end"] = (st + datetime.timedelta(hours=hours - 1)).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+    # 今天的数据到了没有
+    if latest and latest < today:
+        d_today = datetime.datetime.strptime(today, "%Y%m%d")
+        d_latest = datetime.datetime.strptime(latest, "%Y%m%d")
+        lag = (d_today - d_latest).days
+        info["note_today"] = (
+            f"⏰ **数据时效提醒**：今日（{today[:4]}-{today[4:6]}-{today[6:]}）的预报**尚未更新**"
+            f"（课题三每日人工智能预报{UPDATE_SCHEDULE}发布），"
+            f"最近一次为**起报 {info.get('latest_start', '')}**"
+            + (f"，生成于 {info['generated_at']}" if info.get("generated_at") else "")
+            + f"，滞后 {lag} 天。以下结果为该次预报，覆盖至 {info.get('cover_end', '')}。"
+        )
+    elif latest:
+        info["note_today"] = (
+            f"⏰ 今日预报已更新（起报 {info.get('latest_start', '')}"
+            + (f"，生成于 {info['generated_at']}" if info.get("generated_at") else "")
+            + f"，覆盖至 {info.get('cover_end', '')}）。"
+        )
+    return info
+
+
+def date_check(target_date: str, now: Optional[datetime.datetime] = None,
+               kind: str = "surge") -> Dict[str, Any]:
+    """检查用户想看的日期是否在最新预报的覆盖范围内。
+
+    target_date 支持 "今天"/"明天"/"昨天"/"2026-09-16"/"9月16日"/""（空=今天）
+    """
+    now = now or datetime.datetime.now()
+    s = str(target_date or "").strip()
+    d = None
+    rel = ""
+    if not s or s in ("未指定", "今天", "今日", "现在", "当前", "最近"):
+        d, rel = now.date(), "今天"
+    elif "明天" in s or "明日" in s:
+        d, rel = now.date() + datetime.timedelta(days=1), "明天"
+    elif "昨天" in s or "昨日" in s:
+        d, rel = now.date() - datetime.timedelta(days=1), "昨天"
+    elif "后天" in s:
+        d, rel = now.date() + datetime.timedelta(days=2), "后天"
+    else:
+        m = re.search(r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", s)
+        if not m:
+            m = re.search(r"(\d{1,2})[-/月](\d{1,2})", s)
+            if m:
+                try:
+                    d = datetime.date(now.year, int(m.group(1)), int(m.group(2)))
+                except Exception:
+                    d = None
+        else:
+            try:
+                d = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except Exception:
+                d = None
+    info = update_info(now, kind)
+    info["target_date"] = d.strftime("%Y-%m-%d") if d else ""
+    info["target_rel"] = rel
+    if d and info.get("cover_end"):
+        try:
+            ce = datetime.datetime.strptime(info["cover_end"], "%Y-%m-%d %H:%M")
+            if datetime.datetime.combine(d, datetime.time(23, 59)) > ce:
+                info["out_of_coverage"] = True
+                info["note_target"] = (
+                    f"⏰ **数据时效提醒**：{info['target_date']} 超出最近一次预报的覆盖范围"
+                    f"（起报 {info.get('latest_start','')}，覆盖至 {info.get('cover_end','')}）。"
+                    f"课题三每日人工智能预报{UPDATE_SCHEDULE}发布，"
+                    f"{info['target_date']} 的预报尚未更新。以下展示最近一次预报的结果。"
+                )
+        except Exception:
+            pass
+    return info
 
 
 if __name__ == "__main__":  # python -m modules.ai_daily
