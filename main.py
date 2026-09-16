@@ -186,7 +186,42 @@ LIGHTBOX_HEAD = """
     var app = document.querySelector('gradio-app');
     if (app) { bindAll(app); fixBubbles(app); }
   }
-  setInterval(tick, 800);
+
+  // 立刻跑一次（DOM 一变就跑），避免"先窄一秒再变宽"的闪动
+  var _pend = false;
+  function tickSoon(){
+    if (_pend) return;
+    _pend = true;
+    requestAnimationFrame(function(){ _pend = false; tick(); });
+  }
+  try {
+    var mo = new MutationObserver(function(muts){
+      for (var i=0;i<muts.length;i++){
+        var t = muts[i].target;
+        if (!t) continue;
+        var c = (t.className || '') + '';
+        if (typeof c === 'string' && (c.indexOf('message') >= 0 || c.indexOf('chatbot') >= 0
+            || c.indexOf('bubble') >= 0 || c.indexOf('prose') >= 0)) {
+          tickSoon();
+          return;
+        }
+      }
+      tickSoon();
+    });
+    function observe(){
+      if (!document.body) return;
+      mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
+    observe();
+    document.addEventListener('DOMContentLoaded', observe);
+  } catch (e) {}
+
+  // 输入/发送时也立即处理（用户自己那条消息要马上正确）
+  document.addEventListener('keydown', tickSoon, true);
+  document.addEventListener('input', tickSoon, true);
+  document.addEventListener('click', tickSoon, true);
+
+  setInterval(tick, 400);
   document.addEventListener('DOMContentLoaded', tick);
   document.addEventListener('keydown', function(e){
     if (e.key === 'Escape' && box) box.style.display = 'none';
