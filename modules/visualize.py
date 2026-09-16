@@ -65,15 +65,19 @@ def _tag(ctx: ModuleContext) -> str:
 
 
 def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
-    """场查询：绘制区域内**过程最大增水/浪高**的空间分布图。
+    """场查询：区域内**过程最大增水/浪高**空间分布（课题三投产图样式）。
 
-    数据来自课题三每日 AI 预报（风暴潮 `surge` cm / 海浪 `hs_torch` m）。
-    按用户问的区域裁剪显示范围，并在图上标出区域峰值位置。
+    - cartopy 底图 + Natural Earth 海岸线 + 灰色陆地
+    - `jet` 配色：浪高固定 0~8 m，增水按量级取整
+    - 海浪叠加**海况等级线**（小浪…怒涛）；增水标出区域峰值与四色警戒参考
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
+    from . import plotstyle
+
+    plotstyle.setup()
 
     info = ctx.results.get("ai_field") or {}
     fld = info.get("field")
@@ -82,96 +86,85 @@ def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
     if not fld or not st:
         return ""
 
-    lat, lon = fld["lat"], fld["lon"]
+    lat, lon = np.asarray(fld["lat"]), np.asarray(fld["lon"])
     is_wave = info.get("kind") == "wave"
     arr = fld["hs_m"] if is_wave else fld["surge_cm"]
     if arr.ndim == 2:
         arr = arr[None, ...]
     mx = np.nanmax(arr, axis=0)
     LON, LAT = np.meshgrid(lon, lat)
-    if box:
-        m = (LON >= box[0]) & (LON <= box[1]) & (LAT >= box[2]) & (LAT <= box[3])
-        mx = np.where(m, mx, np.nan)
 
     region = ctx.request.get("region", "")
     unit = "m" if is_wave else "cm"
     label = "过程最大有效波高 (m)" if is_wave else "过程最大风暴增水 (cm)"
-    cmap = "YlOrRd"
-    finite = mx[np.isfinite(mx)]
-    vmax_abs = float(np.nanmax(finite)) if finite.size else 1.0
-    # 色标上限取真实最大值（略微上取整），保证峰值在色标上可分辨；
-    # 只有异常离群点占多数时才退回 99 分位
-    p99 = float(np.nanpercentile(finite, 99)) if finite.size else 1.0
-    vmax = vmax_abs if vmax_abs <= p99 * 1.6 else p99
-    vmax = max(vmax, 1.0)
-    vmin = 0.0
-    # 预警阈值参考线（放在色标旁边，便于对照）
-    ths = [2.5, 4.0, 6.0, 9.0] if is_wave else [30, 50, 80, 120]
 
-    fig, ax = plt.subplots(figsize=(7.6, 5.2), dpi=110)
-    pc = ax.pcolormesh(LON, LAT, mx, cmap=cmap, vmin=vmin, vmax=vmax, shading="auto")
-    cb = fig.colorbar(pc, ax=ax, shrink=0.9, pad=0.02)
-    cb.set_label(label, fontsize=9)
-    for t in ths:
-        if vmin < t < vmax:
-            cb.ax.axhline(t, color="#1f4fd6", lw=1.0, ls="--", alpha=0.9)
-            cb.ax.text(1.6, t, f"{t}{unit}", transform=cb.ax.get_yaxis_transform(),
-                       fontsize=7, color="#1f4fd6", va="center")
+    extent = [float(lon.min()), float(lon.max()), float(lat.min()), float(lat.max())]
+    if box:
+        extent = [box[0], box[1], box[2], box[3]]
+        m = (LON >= box[0]) & (LON <= box[1]) & (LAT >= box[2]) & (LAT <= box[3])
+        mx_show = np.where(m, mx, np.nan)
+    else:
+        mx_show = mx
 
-    # 区域峰值标注（放在图内，避免被裁切）
+    finite = mx_show[np.isfinite(mx_show)]
+    if not finite.size:
+        return ""
+    vmax_abs = float(np.nanmax(finite))
+    if is_wave:
+        vmin, vmax, cmap = 0.0, 8.0, "jet"
+        ticks = [0, 2, 4, 6, 8]
+    else:
+        vmin, vmax, cmap = 0.0, max(plotstyle.nice_vmax(vmax_abs, 5.0), 10.0), "jet"
+        ticks = np.linspace(vmin, vmax, 6)
+
+    fig = plt.figure(figsize=(8.8, 6.6))
+    ax = plotstyle.map_axes(fig, [0.055, 0.06, 0.78, 0.86], extent)
+    pc = ax.pcolormesh(LON, LAT, mx_show, cmap=cmap, vmin=vmin, vmax=vmax,
+                       shading="auto", zorder=2)
+    if is_wave:
+        plotstyle.add_sea_state(ax, LON, LAT, mx_show)
+    plotstyle.add_colorbar(fig, ax, pc, label, ticks, shrink=0.85, pad=0.02)
+
+    # 区域峰值
     if st.get("peak_lon") is not None:
         plo, pla = st["peak_lon"], st["peak_lat"]
         pk = st.get("max_m") if is_wave else st.get("max_cm")
-        ax.plot([plo], [pla], marker="*", markersize=16, color="#d6001c",
+        ax.plot([plo], [pla], marker="*", markersize=17, color="#d6001c",
                 markeredgecolor="white", markeredgewidth=1.0, zorder=6)
-        xr_ = (max(LON[np.isfinite(mx)], default=box[1] if box else 128) -
-               min(LON[np.isfinite(mx)], default=box[0] if box else 114)) or 1
-        # 峰值靠近右/上边界时把标签放左下
-        if box:
-            dx = (box[1] - box[0]) * 0.30
-            dy = (box[3] - box[2]) * 0.14
-            tx, ty = (plo - dx, pla - dy) if plo > (box[0] + box[1]) / 2 else (plo + dx * 0.15, pla + dy)
-        else:
-            tx, ty = plo + 0.8, pla + 0.4
+        dx = (extent[1] - extent[0]) * 0.32
+        dy = (extent[3] - extent[2]) * 0.13
+        tx, ty = (plo - dx, pla - dy) if plo > (extent[0] + extent[1]) / 2 else (plo + dx * 0.2, pla + dy)
         ax.annotate(f"区域峰值 {pk} {unit}\n({plo}°E, {pla}°N)",
-                    xy=(plo, pla), xytext=(tx, ty), fontsize=8.5, color="#d6001c",
+                    xy=(plo, pla), xytext=(tx, ty), fontsize=9, color="#d6001c",
                     ha="center", va="center", zorder=7,
-                    bbox=dict(fc="white", alpha=0.82, ec="#d6001c", lw=0.7, pad=2.5),
+                    bbox=dict(fc="white", alpha=0.85, ec="#d6001c", lw=0.8, pad=2.5),
                     arrowprops=dict(arrowstyle="->", color="#d6001c", lw=1.0))
-    # 并列显示的区域站点位置
+
+    # 本站位置
     for nm, (slo, sla) in (("厦门", (118.25, 24.50)), ("崇武", (119.00, 25.00)),
                            ("晋江", (118.50, 24.50)), ("东山", (117.50, 23.75))):
-        if box and not (box[0] <= slo <= box[1] and box[2] <= sla <= box[3]):
+        if not (extent[0] <= slo <= extent[1] and extent[2] <= sla <= extent[3]):
             continue
-        ax.plot([slo], [sla], marker="o", markersize=3.2, color="#1f4fd6", zorder=5)
+        ax.plot([slo], [sla], marker="o", markersize=3.4, color="#0033cc",
+                markeredgecolor="white", markeredgewidth=0.5, zorder=6)
 
     typh = str(ctx.request.get("typhoon", "") or "")
-    date_txt = st.get("peak_dt")
-    title = f"{region} {label.split('(')[0].strip()}空间分布"
+    title = f"{region} {'过程最大有效波高' if is_wave else '过程最大风暴增水'}空间分布"
     if typh:
         title = f"{typh} 号台风 · " + title
-    if date_txt:
+    if fld.get("date"):
         title += f"（起报 {fld.get('date')}）"
-    ax.set_title(title, fontsize=11)
-    ax.set_xlabel("经度 (°E)", fontsize=9)
-    ax.set_ylabel("纬度 (°N)", fontsize=9)
-    ax.tick_params(labelsize=8)
-    if box:
-        ax.set_xlim(box[0], box[1])
-        ax.set_ylim(box[2], box[3])
-    ax.set_aspect("equal", adjustable="box")
-    n_t = fld.get("n_times")
+    ax.set_title(title, fontsize=13, pad=8)
+
     sub_txt = (f"区域最大 {st.get('max_m') if is_wave else st.get('max_cm')} {unit}"
-               f"　格点 {st.get('n_cells')} 个　时长 {n_t} 小时")
-    ax.text(0.01, 0.02, sub_txt, transform=ax.transAxes, fontsize=8,
-            color="#333333", bbox=dict(fc="white", alpha=0.7, ec="#cccccc"))
-    fig.tight_layout(pad=1.0)
-    # 文件名带上区域名，避免不同区域的图互相覆盖
+               f"　格点 {st.get('n_cells')} 个　时长 {fld.get('n_times')} 小时")
+    ax.text(0.012, 0.022, sub_txt, transform=ax.transAxes, fontsize=8.5,
+            color="#333333", zorder=8,
+            bbox=dict(fc="white", alpha=0.75, ec="#cccccc"))
+
     rgn_tag = "".join(ch for ch in str(region) if ch.isalnum() or ch in "东南西北海峡")[:10] or "区域"
     out = OUT_DIR / f"field_ai_{('wave' if is_wave else 'surge')}_{rgn_tag}_{tag}.png"
-    fig.savefig(out, bbox_inches="tight")
-    plt.close(fig)
-    return str(out)
+    return plotstyle.save(fig, out, dpi=150)
 
 
 def _mark_point(ax, ctx: ModuleContext):
@@ -846,25 +839,50 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
     typh = str(ctx.request.get("typhoon", "") or "")
     tlabel = best["tlabel"]
 
-    fig, ax = plt.subplots(figsize=(7.4, 4.4), dpi=110)
-    pc = ax.pcolormesh(LON, LAT, spd, cmap="YlOrRd", shading="auto")
-    cb = fig.colorbar(pc, ax=ax, shrink=0.9)
-    cb.set_label("风速 (m/s)", fontsize=8)
-    step = max(1, LON.shape[0] // 16)
+    # ===== 出图：课题三投产图样式（cartopy 底图 + jet + 风级等值线）=====
+    import cartopy.crs as ccrs
+    from . import plotstyle
+
+    plotstyle.setup()
+    extent = [float(np.nanmin(lonv)), float(np.nanmax(lonv)),
+              float(np.nanmin(latv)), float(np.nanmax(latv))]
+    # 用户点名了区域（如"福建沿海的风场"）→ 按该区域取景（外扩一点），否则用整个模式域
+    fb = ctx.request.get("field_box")
+    if fb and len(fb) == 4:
+        pad_lon = max(0.5, (fb[1] - fb[0]) * 0.10)
+        pad_lat = max(0.5, (fb[3] - fb[2]) * 0.10)
+        extent = [max(extent[0], fb[0] - pad_lon), min(extent[1], fb[1] + pad_lon),
+                  max(extent[2], fb[2] - pad_lat), min(extent[3], fb[3] + pad_lat)]
+    extent[0] = max(extent[0], 105.0)
+    extent[1] = min(extent[1], 138.0)
+    extent[2] = max(extent[2], 8.0)
+    extent[3] = min(extent[3], 38.0)
+    if extent[1] - extent[0] < 1 or extent[3] - extent[2] < 1:
+        extent = [float(np.nanmin(lonv)), float(np.nanmax(lonv)),
+                  float(np.nanmin(latv)), float(np.nanmax(latv))]
+
+    fig = plt.figure(figsize=(10.5, 7.8))
+    ax = plotstyle.map_axes(fig, [0.05, 0.06, 0.79, 0.86], extent)
+    pc = ax.pcolormesh(LON, LAT, spd, cmap="jet", vmin=0, vmax=25,
+                       shading="auto", zorder=2, transform=ccrs.PlateCarree())
+    plotstyle.add_colorbar(fig, ax, pc, "风速 (m/s)",
+                           [0, 5, 10, 15, 20, 25], shrink=0.85, pad=0.02)
+    # 风矢密度按"可见范围"算，取景后别只剩几根
+    iv = np.where((lonv >= extent[0]) & (lonv <= extent[1]))[0]
+    jv = np.where((latv >= extent[2]) & (latv <= extent[3]))[0]
+    n_vis = max(len(iv), len(jv), 1)
+    step = max(1, int(round(n_vis / 16.0)))
     ax.quiver(LON[::step, ::step], LAT[::step, ::step],
               uu[::step, ::step], vv[::step, ::step],
-              color="k", width=0.0025, scale=350, alpha=0.85)
-    title = f"{typh}台风 风场" if typh else "风场"
+              color="k", width=0.0022, scale=380, alpha=0.9, zorder=4,
+              transform=ccrs.PlateCarree())
+    plotstyle.add_wind_levels(ax, LON, LAT, spd, transform=ccrs.PlateCarree())
+
+    title = f"{typh}号台风 风场" if typh else "风场"
     if tlabel:
-        title += f"（{tlabel}）"
-    title += f" 最大风速 {best['max_spd']:.1f} m/s"
-    ax.set_title(title, fontsize=11)
-    ax.set_xlabel("经度", fontsize=9)
-    ax.set_ylabel("纬度", fontsize=9)
-    ax.tick_params(labelsize=8)
+        title += f"　{tlabel} UTC"
+    title += f"　最大风速 {best['max_spd']:.1f} m/s"
+    ax.set_title(title, fontsize=13, pad=8)
     _mark_point(ax, ctx)
-    fig.tight_layout(pad=1.0)
     fp = OUT_DIR / f"wind_field_{tag}.png"
-    fig.savefig(fp, bbox_inches="tight")
-    plt.close(fig)
-    return [str(fp)]
+    return [plotstyle.save(fig, fp, dpi=150)]
