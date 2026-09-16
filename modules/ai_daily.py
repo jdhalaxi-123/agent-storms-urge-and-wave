@@ -694,6 +694,122 @@ def beaufort(ms: float) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# ⑧ 每日**精细**增水场（0.01°，福建中南部近海，33 MB/天）
+#    surge_predicted_YYYYMMDD.nc  361×136  116.70~120.30°E / 23.83~25.17°N
+#    小区域（如闽南）用它，格点细 25 倍，不再一格一格
+# --------------------------------------------------------------------------- #
+FINE_SURGE_DIR = TOTAL_WATER_DIR
+FINE_SURGE_DOMAIN = (116.70, 120.30, 23.83, 25.17)   # lon_min, lon_max, lat_min, lat_max
+
+
+def list_fine_surge_dates(force: bool = False) -> List[str]:
+    key = "fine:dates"
+    now = time.time()
+    if not force and key in _mem and now - _mem[key]["t"] < 600:
+        return _mem[key]["v"]
+    try:
+        dates = _dates_from(_ls(FINE_SURGE_DIR), r"surge_predicted_(\d{8})\.nc")
+    except Exception:
+        dates = []
+    _mem[key] = {"t": now, "v": dates}
+    return dates
+
+
+def fine_surge_covers(box) -> bool:
+    """给定的经纬度框是否完全落在精细场范围内（留一点余量）。"""
+    if not box or len(box) != 4:
+        return False
+    lo0, lo1, la0, la1 = FINE_SURGE_DOMAIN
+    return (box[0] >= lo0 - 0.05 and box[1] <= lo1 + 0.05
+            and box[2] >= la0 - 0.05 and box[3] <= la1 + 0.05)
+
+
+def fine_surge_clip(box, min_ratio: float = 0.5):
+    """把请求框与精细场范围取交集。
+
+    完全覆盖 → 原框；部分重叠且重叠面积占比 ≥ min_ratio → 返回交集（只画精细场覆盖的那部分）；
+    否则返回 None（改用 0.25° 场）。
+    """
+    if not box or len(box) != 4:
+        return None
+    lo0, lo1, la0, la1 = FINE_SURGE_DOMAIN
+    if fine_surge_covers(box):
+        return tuple(float(x) for x in box)
+    ix0, ix1 = max(box[0], lo0), min(box[1], lo1)
+    iy0, iy1 = max(box[2], la0), min(box[3], la1)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return None
+    inter = (ix1 - ix0) * (iy1 - iy0)
+    whole = max((box[1] - box[0]) * (box[3] - box[2]), 1e-9)
+    if inter / whole >= min_ratio:
+        return (float(ix0), float(ix1), float(iy0), float(iy1))
+    return None
+
+
+def load_fine_surge_field(date: str = "", force: bool = False) -> Optional[Dict[str, Any]]:
+    """读取每日**精细**增水场（0.01°）。date 为空取最新起报日。单文件 33 MB。"""
+    key = f"fine:{date or 'latest'}"
+    now = time.time()
+    if not force and key in _mem and now - _mem[key]["t"] < 600:
+        return _mem[key]["v"]
+
+    dates = list_fine_surge_dates()
+    if not dates:
+        return None
+    d = date if (date and date in dates) else dates[-1]
+    remote = f"{FINE_SURGE_DIR}/surge_predicted_{d}.nc"
+    ftp = fc.ftp_client._connect()
+    try:
+        sz = fc._stat_size(ftp, remote)
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            pass
+    if not sz:
+        return None
+    lp = fc.fetch(remote, force=force, expected_size=sz)
+    if not lp:
+        return None
+
+    import xarray as xr
+    try:
+        ds = xr.open_dataset(lp, decode_times=True)
+        lat = np.asarray(ds["latitude"].values, dtype=float)
+        lon = np.asarray(ds["longitude"].values, dtype=float)
+        surge = np.asarray(ds["surge"].values, dtype=float)
+        base = None
+        try:
+            tv = np.asarray(ds["time"].values).ravel()
+            if tv.size:
+                import datetime as _dt
+                base = _dt.datetime.strptime(d, "%Y%m%d")
+        except Exception:
+            pass
+        ds.close()
+    except Exception as e:
+        print(f"[ai_daily] 读精细增水场失败: {e}")
+        return None
+
+    info = {"lat": lat, "lon": lon, "surge_cm": surge, "n_times": int(surge.shape[0]),
+            "date": d, "start_dt": base, "file": f"surge_predicted_{d}.nc",
+            "size_mb": round(sz / 1e6, 1), "path": remote, "local": lp,
+            "fine": True, "res": 0.01,
+            "source": f"课题三 每日人工智能预报·精细网格(0.01°) 起报 {d}"}
+    _mem[key] = {"t": now, "v": info}
+    return info
+
+
+def fine_field_stats(field: Dict[str, Any], box: Optional[tuple] = None) -> Dict[str, Any]:
+    """精细场统计（结构同 field_stats，单位 cm）。"""
+    st = field_stats(field, box)
+    if st:
+        st["fine_grid"] = True
+        st["res"] = 0.01
+    return st
+
+
+# --------------------------------------------------------------------------- #
 # 概览
 # --------------------------------------------------------------------------- #
 def overview() -> Dict[str, Any]:

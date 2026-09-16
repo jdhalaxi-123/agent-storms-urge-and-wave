@@ -174,12 +174,17 @@ def main() -> int:
         else:
             log("③ AI 海浪场：未找到", args.quiet)
 
-        # ④ 增水场大版 + 站点 npy（小，顺带）
+        # ④ 站点序列 npy + **精细增水场**（0.01°，33 MB，小区域出图用）
         t = newest(TOTAL_DIR, r"surge_stations_(\d{8})\.npy", ftp)
         if t:
             log(f"④ 站点序列 npy：最新 {t[0]}", args.quiet)
             if not args.check_only:
                 got += grab(t[1]["path"], t[1]["size"], args.quiet, "站点 npy")
+        fp = newest(TOTAL_DIR, r"surge_predicted_(\d{8})\.nc", ftp)
+        if fp:
+            log(f"④b 精细增水场 0.01°：最新 {fp[0]}（{fp[1]['size']/1e6:.0f} MB）", args.quiet)
+            if not args.check_only:
+                got += grab(fp[1]["path"], fp[1]["size"], args.quiet, "精细增水场")
 
         # ⑤ 海浪单点（一整天的目录，每个约 11 KB）
         wp = newest(WAVE_POINT_DIR, r"(\d{8})", ftp)

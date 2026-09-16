@@ -1026,9 +1026,26 @@ def _run_field_query(ctx: ModuleContext, box: list, region: str) -> Optional[Dic
         st = ai_daily.wave_field_stats(fld, box) if fld else {}
         kind, unit = "wave", "m"
     else:
-        fld = ai_daily.load_surge_field(date)
-        st = ai_daily.field_stats(fld, box) if fld else {}
-        kind, unit = "surge", "cm"
+        # ⭐ 小区域（闽南、厦门、泉州…）优先用 **0.01° 精细增水场**，格点细 25 倍；
+        #    范围外或大区域仍用 0.25° 场。部分重叠时取交集（只画精细场覆盖的那块）。
+        fld, st, kind, unit = None, {}, "surge", "cm"
+        box_fine = None
+        if box:
+            span = max(box[1] - box[0], box[3] - box[2])
+            if span <= 4.0:
+                try:
+                    box_fine = ai_daily.fine_surge_clip(box)
+                except Exception:
+                    box_fine = None
+        if box_fine:
+            fld = ai_daily.load_fine_surge_field(date)
+            if fld:
+                st = ai_daily.fine_field_stats(fld, box_fine)
+                if st:
+                    box = box_fine          # 图与统计都用交集范围
+        if not fld or not st:
+            fld = ai_daily.load_surge_field(date)
+            st = ai_daily.field_stats(fld, box) if fld else {}
     if not fld or not st:
         return None
 
