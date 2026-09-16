@@ -150,11 +150,41 @@ LIGHTBOX_HEAD = """
     }
     if (root.shadowRoot) bindAll(root.shadowRoot);
   }
+
+  // 气泡宽度：直接写行内样式（行内优先级最高，Gradio 的 width:100% 压不过它）
+  // 目标：像微信那样——文字多长、气泡多长；一行最多约 46 个汉字再换行。
+  function fixBubbles(root){
+    if (!root || !root.querySelectorAll) return;
+    var els = root.querySelectorAll('.message, [class*="message"], .bubble');
+    for (var i=0;i<els.length;i++){
+      var e = els[i];
+      if (!e.className || typeof e.className !== 'string') continue;
+      var c = ' ' + e.className + ' ';
+      if (c.indexOf('message-row') >= 0) continue;      // 行容器不动，交给 Gradio 排版
+      if (c.indexOf(' message ') >= 0 || c.indexOf(' bubble ') >= 0){
+        e.style.setProperty('width', 'fit-content', 'important');
+        e.style.setProperty('max-width', '46em', 'important');
+        e.style.setProperty('flex', '0 0 auto', 'important');
+      }
+    }
+    var inner = root.querySelectorAll('.flex-wrap');
+    for (var k=0;k<inner.length;k++){
+      inner[k].style.setProperty('width', 'auto', 'important');
+      inner[k].style.setProperty('max-width', '100%', 'important');
+    }
+    var all = root.querySelectorAll('*');
+    for (var j=0;j<all.length;j++){
+      if (all[j].shadowRoot) fixBubbles(all[j].shadowRoot);
+    }
+    if (root.shadowRoot) fixBubbles(root.shadowRoot);
+  }
+
   function tick(){
     if (!document.body) return;
     bindAll(document);
+    fixBubbles(document);
     var app = document.querySelector('gradio-app');
-    if (app) bindAll(app);
+    if (app) { bindAll(app); fixBubbles(app); }
   }
   setInterval(tick, 800);
   document.addEventListener('DOMContentLoaded', tick);
