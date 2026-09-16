@@ -228,9 +228,16 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
         # ===== 海浪波高曲线 =====
         if want("wave"):
+            geo_w = ctx.results.get("geo_stats", {}) or {}
+            wsite = [s for s in (geo_w.get("sites") or []) if s.get("series_wave_m")]
             ws = ctx.results.get("wave_stats", {}) or {}
             series = ws.get("series") or []
-            if series:
+            if wsite:
+                # 站点海浪：直接走站点过程曲线（与增水曲线同一套版式）
+                p = _draw_surge(OUT_DIR, wsite, ctx, tag)
+                if p:
+                    images.append(str(p))
+            elif series:
                 path = OUT_DIR / f"wave_series_{tag}.png"
                 fig, ax = plt.subplots(figsize=(6.9, 3.6), dpi=110)
                 ax.plot(series, lw=1.6, color="#1f77b4")
@@ -318,14 +325,15 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
 
     geo = ctx.results.get("geo_stats", {}) or {}
     region = geo.get("region") or ctx.request.get("region") or "目标海域"
-    path = OUT_DIR / f"surge_series_{tag}.png"
-
     is_wave = str(ctx.request.get("disaster", "")) == "wave"
+    path = OUT_DIR / (f"wave_series_{tag}.png" if is_wave else f"surge_series_{tag}.png")
+
     fig, ax = plt.subplots(figsize=(14.8, 4.8), dpi=150)
     colors = ["black", "#555555", "#888888", "#aaaaaa", "#bbbbbb"]
     line_colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"]
     for si, s in enumerate(sites[:4]):
-        ser = s.get("series_full") or s.get("series_cm") or s.get("series") or []
+        ser = (s.get("series_full") or s.get("series_wave_m")
+               or s.get("series_cm") or s.get("series") or [])
         if not ser:
             continue
         st_dt = s.get("start_dt")
@@ -358,12 +366,13 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
     s0 = sites[0] if sites else {}
     sname = s0.get("short") or s0.get("name", region)
     st = s0.get("start_dt") or datetime.datetime.now()
-    n = len(s0.get("series_full") or s0.get("series") or [])
+    n = len(s0.get("series_full") or s0.get("series_wave_m")
+            or s0.get("series_cm") or s0.get("series") or [])
     en = st + datetime.timedelta(hours=max(n - 1, 0)) if n else st
-    code = s0.get("code") or ""
+    code = str(s0.get("code") or "")
+    code_txt = f"（{code}）" if code and code not in ("PT", "BOX") else ""
     qt = "有效波高" if is_wave else "风暴增水"
-    title = f"{sname}{('（' + code + '）') if code else ''} {qt}过程"
-    title += f"　{st.strftime('%Y%m%d')} ~ {en.strftime('%Y%m%d')}"
+    title = f"{sname}{code_txt} {qt}过程　{st.strftime('%Y%m%d')} ~ {en.strftime('%Y%m%d')}"
     ax.set_title(title, fontsize=15, pad=10)
     ax.set_xlabel("Time", fontsize=12)
     ax.set_ylabel(f"{'Sig. wave height' if is_wave else 'Storm surge'} (cm)" if not is_wave

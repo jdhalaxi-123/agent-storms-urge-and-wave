@@ -1117,36 +1117,78 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
         st = ai_daily.wave_field_stats(fld, box) if fld else {}
         if not fld or not st:
             return None
-        # 周边海域逐时最大浪高 → 过程曲线
-        LON, LAT = np.meshgrid(fld["lon"], fld["lat"])
-        m = (LON >= box[0]) & (LON <= box[1]) & (LAT >= box[2]) & (LAT <= box[3])
-        arr = fld["hs_m"]
-        series = np.nanmax(arr[:, m], axis=1) if arr[:, m].size else np.asarray([])
+        # ⭐ 站点问题给**站点序列**：取该点最近格点的逐时浪高/周期/波向
+        #   （用户问"厦门的海浪"，要的是厦门这个点的过程，不是一片区域场）
+        lon_a = np.asarray(fld["lon"], dtype=float)
+        lat_a = np.asarray(fld["lat"], dtype=float)
+        ix = int(np.argmin(np.abs(lon_a - lo)))
+        iy = int(np.argmin(np.abs(lat_a - la)))
+        pt_lon, pt_lat = float(lon_a[ix]), float(lat_a[iy])
+        arr_pt = fld["hs_m"][:, iy, ix]
+        series = np.asarray(arr_pt, dtype=float)
         start = fld.get("start_dt")
         lb = name or region
-        site = {"name": f"{lb}邻近海域", "short": f"{lb}邻近海域", "code": "BOX",
-                "lon": st.get("peak_lon"), "lat": st.get("peak_lat"), "start_dt": start,
-                "series_cm": [], "series_full": [], "series_wave_m": series.tolist(),
-                "data_kind": "课题三 AI 海浪场（该点周边 1°×1°）"}
-        geo = _finalize([site], region, "ai_field", fld.get("file", ""))
-        geo["field_query"] = True
-        geo["field_kind"] = "wave"
-        geo["field_unit"] = "m"
-        geo["field_stats"] = st
-        geo["field_box"] = list(box)
-        geo["field_grid"] = {"lat_min": float(fld["lat"].min()), "lat_max": float(fld["lat"].max()),
-                             "lon_min": float(fld["lon"].min()), "lon_max": float(fld["lon"].max()),
-                             "n_lat": int(fld["lat"].size), "n_lon": int(fld["lon"].size),
-                             "res": round(float(abs(fld["lon"][1] - fld["lon"][0])), 3)}
-        geo["field_source"] = fld.get("source", "")
-        geo["field_date"] = fld.get("date", "")
-        geo["data_source"] = "课题三 每日人工智能预报"
-        geo["freshness"] = fresh
+        site = {"name": lb, "short": lb, "code": "PT",
+                "lon": pt_lon, "lat": pt_lat, "start_dt": start,
+                "series_cm": [], "series_full": [],
+                "series_wave_m": [None if not np.isfinite(v) else round(float(v), 2)
+                                  for v in series],
+                "data_kind": f"课题三 AI 海浪场（最近格点 {pt_lon:.2f}°E, {pt_lat:.2f}°N）"}
+        geo = _finalize([site], region, "ai_point", fld.get("file", ""))
+        geo["point_query"] = True
+        geo["ai_daily"] = True
         geo["point_name"] = lb
+        geo["point_grid"] = {"lon": pt_lon, "lat": pt_lat,
+                            "dist_km": round(float(np.hypot(pt_lon - lo, pt_lat - la) * 111), 1)}
+        geo["data_source"] = "课题三 每日人工智能预报"
+        geo["field_date"] = fld.get("date", "")
+        geo["freshness"] = fresh
+
+        # 周期 / 波向（同一格点，海浪场里就有，属于"白捡"的信息）
+        extra_vars = {}
+        for key, vname, unit in (("mwp_s", "mwp_torch", "s"), ("mwd_deg", "mwd_torch", "°")):
+            try:
+                import xarray as _xr
+                remote = fld.get("path")
+                lp2 = fc.fetch(remote) if remote else None
+                if not lp2:
+                    continue
+                ds2 = _xr.open_dataset(lp2, decode_times=False)
+                if vname in ds2.variables:
+                    v = np.asarray(ds2[vname].values, dtype=float)[:, iy, ix]
+                    extra_vars[key] = {
+                        "max": round(float(np.nanmax(v)), 2),
+                        "mean": round(float(np.nanmean(v)), 2),
+                        "unit": unit,
+                    }
+                ds2.close()
+            except Exception:
+                pass
+        if extra_vars:
+            geo["point_extra"] = extra_vars
+
+        # 供 visualize 画站点的海浪过程曲线（与台风个例的曲线同一套逻辑）
+        if np.isfinite(series).any():
+            k = int(np.nanargmax(series))
+            peak_t = ""
+            if start is not None:
+                try:
+                    peak_t = (start + datetime.timedelta(hours=k)).strftime("%m-%d %H:%M")
+                except Exception:
+                    peak_t = ""
+            ctx.results["wave_stats"] = {
+                "status": "ok",
+                "series": [None if not np.isfinite(v) else round(float(v), 2) for v in series],
+                "max_hs_m": round(float(np.nanmax(series)), 2),
+                "peak_hour": k,
+                "peak_time": peak_t,
+                # 注意：这里是**模式最近格点**，不是浮标站，不要写成"浮标站 XXX"
+                "source": f"课题三 每日 AI 海浪场（{lb} 最近格点 {pt_lon:.2f}°E, {pt_lat:.2f}°N）",
+                "point_name": lb,
+            }
         if start and len(series):
             geo["data_start"] = start.strftime("%Y-%m-%d %H:%M")
             geo["data_end"] = (start + datetime.timedelta(hours=len(series) - 1)).strftime("%Y-%m-%d %H:%M")
-        ctx.results["ai_field"] = {"kind": "wave", "field": fld, "stats": st, "box": box}
         return geo
 
     # 命中的站点
