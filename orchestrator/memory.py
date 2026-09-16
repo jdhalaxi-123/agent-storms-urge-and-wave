@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import datetime
 import json
 import time
 from pathlib import Path
@@ -23,11 +24,37 @@ CHAT_FILE = Path(__file__).resolve().parent.parent / "AgentRecord.chat.jsonl"
 
 
 def append(entry: Dict[str, Any]) -> None:
-    """追加一条会话记录（每轮对话结束时调用）。"""
+    """追加一条会话记录（每轮对话结束时调用）。
+
+    注意：结果里可能含 datetime / numpy 标量（如场统计的峰值时刻），
+    统一用 default 兜底成字符串，避免写盘时报 JSON 序列化错误。
+    """
     rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), **entry}
     RECORD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        line = json.dumps(rec, ensure_ascii=False, default=_json_default)
+    except Exception as e:  # noqa: BLE001
+        line = json.dumps({"ts": rec["ts"], "error": f"序列化失败: {str(e)[:120]}",
+                           "request": str(entry.get("request", ""))[:200]}, ensure_ascii=False)
     with open(RECORD_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        f.write(line + "\n")
+
+
+def _json_default(o: Any):
+    """JSON 兜底：datetime / date / numpy 标量 -> 字符串或基本类型。"""
+    if isinstance(o, (datetime.datetime, datetime.date)):
+        return o.strftime("%Y-%m-%d %H:%M:%S" if isinstance(o, datetime.datetime) else "%Y-%m-%d")
+    if hasattr(o, "item"):          # numpy 标量
+        try:
+            return o.item()
+        except Exception:
+            pass
+    if hasattr(o, "tolist"):        # numpy 数组
+        try:
+            return o.tolist()
+        except Exception:
+            pass
+    return str(o)
 
 
 def recent(n: int = 10) -> List[Dict[str, Any]]:

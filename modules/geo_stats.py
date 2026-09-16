@@ -1090,6 +1090,65 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
     """
     from . import ai_daily
 
+    disaster = str(ctx.request.get("disaster", "storm_surge") or "storm_surge")
+
+    # ---- 海浪：用 AI 海浪场在该地点周边裁剪统计（浮标站无经纬度对照，按点名位置取邻近海域）----
+    if disaster == "wave":
+        from orchestrator import geo_domain as _gd
+        name, coord = _gd.locate(region)
+        pt = ctx.request.get("point")
+        if pt:
+            try:
+                coord = (float(pt[0]), float(pt[1]))
+            except Exception:
+                pass
+        if not coord:
+            return None
+        lo, la = float(coord[0]), float(coord[1])
+        half = 0.5
+        box = (lo - half, lo + half, la - half, la + half)
+        kind_ = "wave"
+        try:
+            fresh = ai_daily.date_check(str(ctx.request.get("date", "") or ""), kind=kind_)
+        except Exception:
+            fresh = {}
+        wdate = fresh.get("latest_date", "") if fresh.get("out_of_coverage") else ""
+        fld = ai_daily.load_wave_field(wdate)
+        st = ai_daily.wave_field_stats(fld, box) if fld else {}
+        if not fld or not st:
+            return None
+        # 周边海域逐时最大浪高 → 过程曲线
+        LON, LAT = np.meshgrid(fld["lon"], fld["lat"])
+        m = (LON >= box[0]) & (LON <= box[1]) & (LAT >= box[2]) & (LAT <= box[3])
+        arr = fld["hs_m"]
+        series = np.nanmax(arr[:, m], axis=1) if arr[:, m].size else np.asarray([])
+        start = fld.get("start_dt")
+        lb = name or region
+        site = {"name": f"{lb}邻近海域", "short": f"{lb}邻近海域", "code": "BOX",
+                "lon": st.get("peak_lon"), "lat": st.get("peak_lat"), "start_dt": start,
+                "series_cm": [], "series_full": [], "series_wave_m": series.tolist(),
+                "data_kind": "课题三 AI 海浪场（该点周边 1°×1°）"}
+        geo = _finalize([site], region, "ai_field", fld.get("file", ""))
+        geo["field_query"] = True
+        geo["field_kind"] = "wave"
+        geo["field_unit"] = "m"
+        geo["field_stats"] = st
+        geo["field_box"] = list(box)
+        geo["field_grid"] = {"lat_min": float(fld["lat"].min()), "lat_max": float(fld["lat"].max()),
+                             "lon_min": float(fld["lon"].min()), "lon_max": float(fld["lon"].max()),
+                             "n_lat": int(fld["lat"].size), "n_lon": int(fld["lon"].size),
+                             "res": round(float(abs(fld["lon"][1] - fld["lon"][0])), 3)}
+        geo["field_source"] = fld.get("source", "")
+        geo["field_date"] = fld.get("date", "")
+        geo["data_source"] = "课题三 每日人工智能预报"
+        geo["freshness"] = fresh
+        geo["point_name"] = lb
+        if start and len(series):
+            geo["data_start"] = start.strftime("%Y-%m-%d %H:%M")
+            geo["data_end"] = (start + datetime.timedelta(hours=len(series) - 1)).strftime("%Y-%m-%d %H:%M")
+        ctx.results["ai_field"] = {"kind": "wave", "field": fld, "stats": st, "box": box}
+        return geo
+
     # 命中的站点
     code = None
     for cn, c in ai_daily.SURGE_STATIONS.items():
@@ -1199,18 +1258,17 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 _attach_wave(ctx)
             return ctx
 
-    # ⭐⭐⭐⭐ 常规（非台风个例）单点查询 → 用「当天的」AI 每日预报 + 天文潮
+    # ⭐⭐⭐⭐ 常规（非台风个例）查询 → 用「当天的」AI 每日预报
     if not ctx.files.get("ftp_typhoon") and not ctx.request.get("field_query"):
-        if str(ctx.request.get("disaster", "")) != "wave":
-            try:
-                geo = _run_ai_point_query(ctx, region, target_date)
-                if geo and geo.get("sites"):
-                    ctx.results["geo_stats"] = geo
-                    if not (ctx.results.get("wave_stats") or {}).get("status") == "ok":
-                        _attach_wave(ctx)
-                    return ctx
-            except Exception as e:  # noqa: BLE001
-                print(f"[geo_stats] AI 单点查询失败: {e}")
+        try:
+            geo = _run_ai_point_query(ctx, region, target_date)
+            if geo and geo.get("sites"):
+                ctx.results["geo_stats"] = geo
+                if not (ctx.results.get("wave_stats") or {}).get("status") == "ok":
+                    _attach_wave(ctx)
+                return ctx
+        except Exception as e:  # noqa: BLE001
+            print(f"[geo_stats] AI 每日预报查询失败: {e}")
 
     # ⭐⭐ 任意经纬度/任意地名：按点采样（优先级最高）
     pt = _point_from_request(ctx.request)

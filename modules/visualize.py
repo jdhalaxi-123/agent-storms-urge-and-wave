@@ -218,8 +218,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 return disaster != "wave"
             return False
 
-        # ===== 场查询：区域分布图（风暴潮/海浪）=====
-        if ctx.request.get("field_query"):
+        # ===== 场查询/区域预报：出区域分布图（风暴潮/海浪）=====
+        if ctx.request.get("field_query") or ctx.results.get("ai_field"):
             fp = _draw_ai_field(OUT_DIR, ctx, tag)
             if fp:
                 images.append(str(fp))

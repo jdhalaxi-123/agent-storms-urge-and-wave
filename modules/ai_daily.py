@@ -386,46 +386,78 @@ def load_point_surge(code: str = "XMN", date: str = "") -> Optional[Dict[str, An
 
 
 def list_point_wave_dates(code: str = "C6W10") -> List[str]:
-    out = []
+    """AI 单点波浪的可用起报日。
+
+    注意：文件放在**按日期分的子目录**里：
+        wave_for_single_point/outputs/nc_file/{YYYYMMDD}/ATM_point_wave_{站号}_{YYYYMMDD}.nc
+    旧格式也可能直接放在 nc_files/ 下，两种都要找。
+    """
+    out = set()
+    pat = re.compile(rf"ATM_point_wave_{re.escape(code)}_(\d{{8}})\.nc$")
     for e in _ls(POINT_WAVE_DIR):
         if e["dir"]:
-            m = re.match(rf"ATM_point_wave_{code}_(\d{{8}})\.nc", e["name"])
+            d = e["name"]
+            if re.fullmatch(r"\d{8}", d):
+                for sub in _ls(e["path"]):
+                    m = pat.match(sub["name"])
+                    if m:
+                        out.add(m.group(1))
+        else:
+            m = pat.match(e["name"])
             if m:
-                out.append((m.group(1), e))
-            else:
-                continue
-    return sorted({d for d, _ in out})
+                out.add(m.group(1))
+    # 兼容旧目录 nc_files/
+    old = POINT_WAVE_DIR.replace("/nc_file", "/nc_files")
+    for e in _ls(old):
+        if not e["dir"]:
+            m = pat.match(e["name"])
+            if m:
+                out.add(m.group(1))
+    return sorted(out)
 
 
 def load_point_wave(code: str = "C6W10", date: str = "") -> Optional[Dict[str, Any]]:
-    """读取单点 AI 波浪预报（swh, m）。"""
+    """读取单点 AI 波浪预报（swh, m）。date 为空取最新起报日。"""
     import xarray as xr
 
-    entries = _ls(POINT_WAVE_DIR)
-    cands = []
-    for e in entries:
-        m = re.match(rf"ATM_point_wave_{code}_(\d{{8}})\.nc", e["name"])
-        if m:
-            cands.append((m.group(1), e))
-    if not cands:
+    dates = list_point_wave_dates(code)
+    if not dates:
         return None
-    cands.sort(key=lambda x: x[0])
-    d, e = (cands[-1] if not date else
-            next((c for c in cands if c[0] == date), cands[-1]))
-    lp = fc.fetch(e["path"], expected_size=e["size"])
+    d = date if date in dates else dates[-1]
+    name = f"ATM_point_wave_{code}_{d}.nc"
+    cands = []
+    for cand in (f"{POINT_WAVE_DIR}/{d}/{name}", f"{POINT_WAVE_DIR}/{name}",
+                 f"{POINT_WAVE_DIR.replace('/nc_file', '/nc_files')}/{d}/{name}",
+                 f"{POINT_WAVE_DIR.replace('/nc_file', '/nc_files')}/{name}"):
+        cands.append(cand)
+    target = None
+    for c in cands:
+        base, _, fn = c.rpartition("/")
+        for e in _ls(base):
+            if e["name"] == fn and not e["dir"]:
+                target = e
+                break
+        if target:
+            break
+    if not target:
+        return None
+    lp = fc.fetch(target["path"], expected_size=target["size"])
     if not lp:
         return None
     try:
         ds = xr.open_dataset(lp, decode_times=False)
-        base = datetime.datetime.strptime(d, "%Y%m%d")
-        row = {"code": code, "date": d, "start_dt": base, "file": e["name"]}
+        base_dt = datetime.datetime.strptime(d, "%Y%m%d")
+        row = {"code": code, "date": d, "start_dt": base_dt, "file": name,
+               "size": target["size"]}
         for key, v in (("series_m", "swh"), ("period_s", "mwp"), ("dir_deg", "mwd")):
             if v in ds.variables:
                 row[key] = np.asarray(ds[v].values, dtype=float).ravel().tolist()
         ds.close()
         row["n"] = len(row.get("series_m") or [])
+        arr = np.asarray([v for v in (row.get("series_m") or []) if v is not None], dtype=float)
+        row["max_hs_m"] = round(float(arr.max()), 2) if arr.size else None
         row["source"] = f"课题三 AI 波浪预报 单点 {code} 起报 {d}"
-        row["path"] = e["path"]
+        row["path"] = target["path"]
         return row
     except Exception as ex:  # noqa: BLE001
         print(f"[ai_daily] 读单点波浪失败: {ex}")
