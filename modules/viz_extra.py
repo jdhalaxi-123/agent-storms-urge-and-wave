@@ -67,10 +67,15 @@ def _daily_wave(ctx, date: str = "") -> Optional[Dict[str, Any]]:
                 lat = np.asarray(ds["latitude"].values, dtype=float)
                 lon = np.asarray(ds["longitude"].values, dtype=float)
                 hs = np.asarray(ds["hs_torch"].values, dtype=float)
+                mk = np.asarray(ds["mask"].values) if "mask" in ds.variables else None
             finally:
                 ds.close()
+            if mk is not None and mk.shape == hs.shape[-2:]:
+                hs = np.where(mk[None, :, :] > 0, hs, np.nan) if hs.ndim == 3 else \
+                    np.where(mk > 0, hs, np.nan)
             d = p.name[:8]
-            return {"lat": lat, "lon": lon, "hs_m": hs, "n_times": int(hs.shape[0]),
+            return {"lat": lat, "lon": lon, "hs_m": hs, "mask": mk,
+                    "n_times": int(hs.shape[0]),
                     "date": d, "start_dt": _dt.datetime.strptime(d, "%Y%m%d"),
                     "file": p.name, "path": str(p)}
         except Exception:
@@ -154,6 +159,16 @@ def draw_wind_wave_pair(OUT_DIR: Path, ctx, tag: str) -> List[str]:
     wlon = np.asarray(wave["lon"]) if wave else None
     wlat = np.asarray(wave["lat"]) if wave else None
     wtime = wave.get("times") if wave else None
+    wmask = (wave or {}).get("mask")
+    # 陆地掩膜：浪场在陆地上也有值，出图前套上（否则浪会爬到陆地上）
+    if hs is not None and wmask is not None:
+        try:
+            m = np.asarray(wmask)
+            if m.shape == hs.shape[-2:]:
+                hs = np.where(m[None, :, :] > 0, hs, np.nan) if hs.ndim == 3 else \
+                    np.where(m > 0, hs, np.nan)
+        except Exception:
+            pass
 
     # 风：取区域峰值时刻；浪：取区域峰值时刻
     spd = np.sqrt(wa["u"] ** 2 + wa["v"] ** 2)

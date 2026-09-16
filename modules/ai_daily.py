@@ -231,6 +231,11 @@ def load_wave_field(date: str = "", use_ec: bool = False) -> Optional[Dict[str, 
         lat = np.asarray(ds["latitude"].values, dtype=float)
         lon = np.asarray(ds["longitude"].values, dtype=float)
         hs = np.asarray(ds["hs_torch"].values, dtype=float)
+        # 陆地掩膜（海=1）：浪场在陆地上也可能有数值，出图/统计前必须套上，
+        # 否则会出现"浪爬到陆地上"和等值线穿过陆地。
+        mask = None
+        if "mask" in ds.variables:
+            mask = np.asarray(ds["mask"].values)
         base = None
         if "time" in ds.variables:
             base = datetime.datetime.strptime(date, "%Y%m%d")
@@ -239,7 +244,10 @@ def load_wave_field(date: str = "", use_ec: bool = False) -> Optional[Dict[str, 
     except Exception as e2:  # noqa: BLE001
         print(f"[ai_daily] 读 AI 海浪场失败: {e2}")
         return None
-    return {"lat": lat, "lon": lon, "hs_m": hs, "n_times": int(hs.shape[0]),
+    if mask is not None and mask.shape == hs.shape[-2:]:
+        hs = np.where(mask[None, :, :] > 0, hs, np.nan) if hs.ndim == 3 else \
+            np.where(mask > 0, hs, np.nan)
+    return {"lat": lat, "lon": lon, "hs_m": hs, "mask": mask, "n_times": int(hs.shape[0]),
             "date": date, "start_dt": base, "file": name,
             "size_mb": round(e["size"] / 1e6, 2), "attrs": src_attrs,
             "source": f"课题三 AI 海浪预报（{'EC' if use_ec else 'ATM'} 风场驱动）· 起报 {date}",
@@ -258,12 +266,15 @@ def wave_field_stats(field: Dict[str, Any], box: Optional[tuple] = None) -> Dict
     if not m.any():
         return {}
     sub = hs[:, m]
-    mx = np.nanmax(sub, axis=0)
-    if not np.isfinite(mx).any():
-        return {}
-    k = int(np.nanargmax(mx))
-    jj, ii = np.where(m)
-    peak_t = int(np.nanargmax(np.nanmax(sub, axis=1)))
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # 陆地掩膜会造出全 NaN 切片
+        mx = np.nanmax(sub, axis=0)
+        if not np.isfinite(mx).any():
+            return {}
+        k = int(np.nanargmax(mx))
+        jj, ii = np.where(m)
+        peak_t = int(np.nanargmax(np.nanmax(sub, axis=1)))
     peak_dt = field["start_dt"] + datetime.timedelta(hours=peak_t) if field.get("start_dt") else None
     lv = {
         "红色(≥9m)": int(np.sum(mx >= 9)),
