@@ -305,8 +305,25 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 images.extend(viz_extra.draw_validation_density(OUT_DIR, ctx, tag))
             except Exception as e:  # noqa: BLE001
                 print(f"[visualize] 实测对比图失败: {e}")
-    except Exception:
-        pass  # 画图失败不影响文字
+
+        # ===== 兜底：一张图都没出来但手上有数据 → 至少给过程曲线 =====
+        # （典型场景：模型给了 plot=surge_field，但站点查询没有场数据，
+        #   场图分支空转，曲线分支又被"已指定图类型"跳过 → 结果 0 张图）
+        if not images:
+            _geo = ctx.results.get("geo_stats", {}) or {}
+            _sites = _geo.get("sites") or []
+            if _sites:
+                try:
+                    p = _draw_surge(OUT_DIR, _sites, ctx, tag)
+                    if p:
+                        images.append(str(p))
+                        print("[visualize] 已用站点过程曲线兜底出图")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[visualize] 兜底曲线失败: {e}")
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        print(f"[visualize] 出图失败（不影响文字）：{e}")
+        traceback.print_exc()
 
     ctx.results["visualize"] = {"images": images}
     return ctx
