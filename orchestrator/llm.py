@@ -76,6 +76,12 @@ SYSTEM_PROMPT = (
     "在 region 里原样写上该坐标，并同时填写 lon / lat 两个参数；"
     "用户给出覆盖区内的任意沿海地名（如福州、平潭、澎湖、金门、高雄、汕头、温州）时，"
     "直接填 region，系统会在该地点的坐标处采样模式场，不需要再问经纬度。"
+    "【站点：两套站别搞混】"
+    "① 风暴潮单点（潮/增水）＝ **4 个本站**：厦门 XMN、崇武 CWU、晋江 JNJ、东山东港 DSN，有中文名与坐标；"
+    "② 海浪单点（浪）＝ **浮标站号**：C6W10、46694A、C5W09 等 16 个，只有站号、没有中文名与经纬度。"
+    "用户问「某个地方的浪」（如「厦门的海浪」）时，按地名取**模式场最近格点**并在回复里说明这一点；"
+    "用户给的是浮标站号（如「C6W10 的浪高」）时按原样填进 region，系统会取真正的海浪单点产品。"
+    "若用户问「有哪些浮标站 / 浪的站号」，用 query_options 的 wave_point_stations 回答。"
     "【覆盖范围】若 forecast_risk 返回“不在覆盖范围”的说明（如上海、青岛等），"
     "直接如实转达该说明，**绝不可自行编造该海域的任何数据或结论**。"
     "【需追问】若 forecast_risk 返回“范围较大，请具体说明位置”的追问说明"
@@ -192,10 +198,23 @@ def _call_options(args: Dict[str, Any]) -> Dict[str, Any]:
         "stations": list(geo_domain.SESSION_STATION_COORD.keys()),
         "disaster": {"storm_surge": "风暴潮（增水/总水位/倒灌风险）", "wave": "海浪（有效波高/浪高）"},
         "plots": {"surge_station": "站点过程曲线", "surge_field": "全场增水分布",
-                  "wave": "海浪波高曲线", "wind": "风场", "all": "全部"},
+                  "wave": "海浪波高曲线", "wind": "风场", "wind_wave": "风+浪并排双联图",
+                  "all": "全部"},
         "domain": geo_domain.DOMAIN_DESC,
         "out_of_domain_examples": ["上海", "青岛", "大连", "深圳", "宁波", "舟山", "海口"],
     }
+    # 海浪单点的浮标站号（与风暴潮单点的 4 个本站是**两套不同的站**）
+    try:
+        from modules import ai_daily as _ad
+        codes = _ad.list_point_wave_stations("")
+        out["wave_point_stations"] = codes
+        out["stations_note"] = (
+            "风暴潮单点=4 个本站（厦门 XMN / 崇武 CWU / 晋江 JNJ / 东山东港 DSN，有中文名与坐标）；"
+            "海浪单点=浮标站号（如 C6W10 / 46694A，只有站号、没有中文名与经纬度）。"
+            "用户没说站号但问「某个地方的浪」时，按地名取模式场最近格点，"
+            "并在回复里说明「取的是该位置最近格点」，不要说成浮标站数据。")
+    except Exception:
+        pass
     # 可查的区域（大范围 → 会出区域分布图）
     try:
         out["regions_field"] = sorted(geo_domain.FIELD_CAPABLE_BROAD)
