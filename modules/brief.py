@@ -21,10 +21,78 @@ from . import brief_tpl
 OUT_DIR = paths.BRIEFS_DIR
 
 
+def _is_wind_only(ctx: ModuleContext) -> bool:
+    """本次请求就是来看风场的。"""
+    req = ctx.request or {}
+    plot = str(req.get("plot", "") or "").strip().lower()
+    dis = str(req.get("disaster", "") or "").strip().lower()
+    return plot == "wind" or dis in ("wind", "风场", "风")
+
+
+def _wind_markdown(ctx: ModuleContext, wind: Dict[str, Any],
+                   st: Dict[str, Any]) -> str:
+    """风场简报：只讲风，不讲增水。"""
+    req = ctx.request or {}
+    region = str(req.get("region") or "关注海域")
+    d = str(wind.get("date") or "")
+    date_txt = f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(d) == 8 else "—"
+    pk = st.get("peak") or {}
+    counts = st.get("counts") or {}
+
+    L = [f"## {region} 风场预报（每日风场 · 起报 {date_txt}）", ""]
+    if pk:
+        L.append(f"- **过程最大风速 {pk.get('speed_ms')} m/s（{pk.get('beaufort')}，"
+                 f"约 {pk.get('speed_kmh')} km/h）**，出现在 "
+                 f"{pk.get('lon')}°E, {pk.get('lat')}°N，{str(pk.get('time','')).replace('T',' ')}")
+    if st.get("mean_peak_ms") is not None:
+        L.append(f"- 区域平均风速峰值 {st.get('mean_peak_ms')} m/s"
+                 f"（{str(st.get('mean_peak_time','')).replace('T',' ')}）")
+    if counts:
+        L.append(f"- 峰值时刻达到 6 级（≥10.8 m/s）的格点 {counts.get('g6')} 个，"
+                 f"8 级（≥17.2 m/s）{counts.get('g8')} 个，"
+                 f"10 级（≥24.5 m/s）{counts.get('g10')} 个（共 {counts.get('n')} 个格点）")
+    stations = st.get("stations") or {}
+    if stations:
+        L += ["", "**代表站点最大风**", "", "| 站点 | 最大风速 | 出现时间 | 风力 |",
+              "| --- | --- | --- | --- |"]
+        for cn, v in stations.items():
+            t = str(v.get("time", "")).replace("T", " ")
+            ms = v.get("speed_ms")
+            bf = ""
+            try:
+                from modules import ai_daily as _ad
+                bf = _ad.beaufort(float(ms))
+            except Exception:
+                bf = ""
+            L.append(f"| {cn} | {ms} m/s | {t} | {bf} |")
+    if st.get("start"):
+        L += ["", f"- 时效：{str(st.get('start')).replace('T',' ')} ~ "
+                  f"{str(st.get('end')).replace('T',' ')}（逐时，共 {st.get('n_time')} 个时次）"]
+    if st.get("lon_range"):
+        L.append(f"- 范围：{st['lon_range'][0]}~{st['lon_range'][1]}°E，"
+                 f"{st['lat_range'][0]}~{st['lat_range'][1]}°N")
+    L += ["", f"- 数据来源：课题三每日风场（{wind.get('file')}，"
+              f"{wind.get('size_mb')} MB），为 AI 风暴潮/海浪预报的驱动风场。"]
+    L += ["", "（附图：风速填色 + 风向箭头，取关注海域风速最强时刻）"]
+    return "\n".join(L)
+
+
 def run(ctx: ModuleContext) -> ModuleContext:
     request = ctx.request or {}
     assess = ctx.results.get("assess", {}) or {}
     selector = ctx.results.get("selector", {}) or {}
+
+    # ⓪ 风场专问：直接出风场简报（不要用风暴潮的口径讲风场）
+    wind = ctx.results.get("daily_wind") or {}
+    st = wind.get("stats") or {}
+    if st and _is_wind_only(ctx):
+        ctx.results["brief"] = {
+            "markdown": _wind_markdown(ctx, wind, st),
+            "docx_path": None,
+            "template": "wind_field",
+            "status": "template",
+        }
+        return ctx
 
     # ① 若上游已产出符合模板结构的完整数据，走真实模板引擎
     data = _build_template_data(ctx, request, assess, selector)

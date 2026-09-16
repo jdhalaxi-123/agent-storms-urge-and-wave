@@ -95,12 +95,38 @@ def judge_by_warn_level(total_level_cm: float, warn: dict) -> str:
     return "无"
 
 
-def _extra_note(geo: Dict[str, Any]) -> str:
+def _is_wind_only(ctx) -> bool:
+    """用户这次就是来看风场的。"""
+    req = getattr(ctx, "request", None) or {}
+    plot = str(req.get("plot", "") or "").strip().lower()
+    dis = str(req.get("disaster", "") or "").strip().lower()
+    return plot == "wind" or dis in ("wind", "风场", "风")
+
+
+def _freshness_text(ctx, geo: Dict[str, Any]) -> str:
+    """数据时效说明。
+
+    风场有独立更新节奏（前一日 22:00 后上传当天），
+    不能拿“每日风暴潮预报尚未更新”去说风场。
+    """
+    if _is_wind_only(ctx):
+        wind = (getattr(ctx, "results", None) or {}).get("daily_wind") or {}
+        d = str(wind.get("date") or "")
+        if len(d) == 8:
+            return (f"风场数据：课题三每日风场，起报 {d[:4]}-{d[4:6]}-{d[6:]}，"
+                    f"每日更新（通常前一日 22:00 后上传当天）。")
+        return ""
+    fresh = (geo or {}).get("freshness") or {}
+    return fresh.get("note_target") or fresh.get("note_today") or ""
+
+
+def _extra_note(geo: Dict[str, Any], ctx=None) -> str:
     """附加上数据来源与实测对比信息（FTP 台风期间数据）。"""
     parts = []
     # ⭐ 数据时效说明（每日预报有固定更新时点）
-    fresh = geo.get("freshness") or {}
-    ftxt = fresh.get("note_target") or fresh.get("note_today") or ""
+    ftxt = (_freshness_text(ctx, geo) if ctx is not None
+            else ((geo.get("freshness") or {}).get("note_target")
+                  or (geo.get("freshness") or {}).get("note_today") or ""))
     if ftxt:
         parts.append(ftxt)
     if geo.get("ai_daily"):
@@ -188,9 +214,8 @@ def _field_brief(ctx: ModuleContext, geo: dict, region: str) -> Optional[Dict[st
         f"{'有效波高分级（蓝2.5/黄4.0/橙6.0/红9.0 m）' if is_wave else '风暴增水分级（蓝30/黄50/橙80/红120 cm）'}。"
         f"区域内站点位置已在图上标出；如需具体站点的过程曲线，请指定站点名（厦门/崇武/晋江/东山东港）。"
     )
-    # ⭐ 数据时效说明（今天的出来没有 / 请求日期是否超范围）
-    fresh = geo.get("freshness") or {}
-    fresh_txt = fresh.get("note_target") or fresh.get("note_today") or ""
+    # ⭐ 数据时效说明（今天的出来没有 / 请求日期是否超范围；风场请求用风场自己的日期）
+    fresh_txt = _freshness_text(ctx, geo)
     if fresh_txt:
         note = fresh_txt + "\n" + note
     return {
@@ -452,7 +477,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
                if is_total_level and (geo.get("tide_total") or {}).get("points") else "")
             + "最终判级以厦门中心业务化运行结果为准。"
             + (f"\n{point_note}" if point_note else "")
-            + _extra_note(geo)
+            + _extra_note(geo, ctx)
         ),
         "targets": "市委办、市政府办、市防汛办",
         "contact": "陶小琴",

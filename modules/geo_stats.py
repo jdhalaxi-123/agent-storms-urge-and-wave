@@ -1231,9 +1231,19 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
 
 def run(ctx: ModuleContext) -> ModuleContext:
     region = ctx.request.get("region", "未知海域")
+    ftp_ty = ctx.files.get("ftp_typhoon")
     typhoon = ctx.results.get("meta", {}).get("typhoon", "") or ""
     hours = _parse_window_hours(ctx.request.get("time_window", ""))
     target_date = _parse_target_date(ctx.request.get("date", ""))
+
+    # ⭐ 每日风场：用户要看风场时，按需取当天的 /group3/wind/atm_forecast_YYYYMMDD.nc
+    # （放在最前面：区域场查询会提前 return，晚挂就挂不上了；
+    #   非台风查询一律以「当天风场」为准，避免误用本地遗留的旧风场文件）
+    if not ftp_ty and _wants_wind(ctx):
+        try:
+            _attach_daily_wind(ctx, target_date)
+        except Exception as e:  # noqa: BLE001
+            print(f"[geo_stats] 每日风场取数失败: {e}")
 
     # ⭐⭐⭐ 场查询（区域性问题）：大范围地名 → 出场分布 + 空间统计
     if ctx.request.get("field_query"):
@@ -1248,7 +1258,6 @@ def run(ctx: ModuleContext) -> ModuleContext:
             print(f"[geo_stats] 场查询失败: {e}")
 
     # ⭐⭐⭐ 台风期间数据（FTP 按需取数）—— 点名了 FTP 上的完整台风时优先
-    ftp_ty = ctx.files.get("ftp_typhoon")
     if ftp_ty:
         geo = _run_ftp_typhoon(ctx, str(ftp_ty), region, target_date)
         if geo and geo.get("sites"):
@@ -1257,14 +1266,6 @@ def run(ctx: ModuleContext) -> ModuleContext:
             if not (ctx.results.get("wave_stats") or {}).get("status") == "ok":
                 _attach_wave(ctx)
             return ctx
-
-    # ⭐⭐⭐ 每日风场：用户要看风场时，按需取当天的 /group3/wind/atm_forecast_YYYYMMDD.nc
-    # （非台风查询一律以「当天风场」为准，避免误用本地遗留的旧风场文件）
-    if not ftp_ty and _wants_wind(ctx):
-        try:
-            _attach_daily_wind(ctx, target_date)
-        except Exception as e:  # noqa: BLE001
-            print(f"[geo_stats] 每日风场取数失败: {e}")
 
     # ⭐⭐⭐⭐ 常规（非台风个例）查询 → 用「当天的」AI 每日预报
     if not ctx.files.get("ftp_typhoon") and not ctx.request.get("field_query"):
@@ -1371,6 +1372,32 @@ def _attach_daily_wind(ctx: ModuleContext, target_date=None) -> Optional[Dict[st
     if not w or not w.get("path"):
         return None
     ctx.files["wind_files"] = [w["path"]]
+    # 按请求范围算风力指标（区域用区域框，站点用周边 ±1.5°）
+    try:
+        box = None
+        fb = ctx.request.get("field_box")
+        if fb and len(fb) == 4:
+            box = tuple(float(x) for x in fb)
+        else:
+            name, coord = None, None
+            try:
+                from orchestrator import geo_domain as _gd
+                name, coord = _gd.locate(str(ctx.request.get("region", "") or ""))
+            except Exception:
+                coord = None
+            pt = ctx.request.get("point")
+            if pt:
+                try:
+                    coord = (float(pt[0]), float(pt[1]))
+                except Exception:
+                    pass
+            if coord:
+                box = (coord[0] - 1.5, coord[0] + 1.5, coord[1] - 1.5, coord[1] + 1.5)
+            else:
+                box = (108.0, 136.0, 8.0, 36.0)
+        w["stats"] = ai_daily.wind_stats(w, box)
+    except Exception as e:  # noqa: BLE001
+        print(f"[geo_stats] 风场指标计算失败: {e}")
     ctx.results["daily_wind"] = w
     return w
 

@@ -536,6 +536,117 @@ def load_wind(date: str = "", force: bool = False) -> Optional[Dict[str, Any]]:
     return info
 
 
+def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None) -> Dict[str, Any]:
+    """读每日风场文件，算关键风力指标（判断"风有多大、影响哪儿"）。
+
+    box = (lon_min, lon_max, lat_min, lat_max)；None 用整个文件覆盖范围。
+    返回：峰值风速/位置/时间、区域平均峰值、6/8/10 级格点数、4 个站点的最大风。
+    """
+    import xarray as xr
+
+    path = (info or {}).get("path")
+    if not path:
+        return {}
+    ds = xr.open_dataset(path, decode_times=True)
+    try:
+        latn = "latitude" if "latitude" in ds else ("lat" if "lat" in ds else None)
+        lonn = "longitude" if "longitude" in ds else ("lon" if "lon" in ds else None)
+        un = next((v for v in ("u10", "u10m", "uwnd", "wind_x") if v in ds.variables), None)
+        vn = next((v for v in ("v10", "v10m", "vwnd", "wind_y") if v in ds.variables), None)
+        if not (latn and lonn and un and vn):
+            return {}
+
+        la_all = np.asarray(ds[latn].values).ravel()
+        lo_all = np.asarray(ds[lonn].values).ravel()
+        sub = ds
+        if box:
+            if latn in ds.dims and lonn in ds.dims:
+                sub = ds.sel({lonn: slice(box[0], box[1]), latn: slice(box[2], box[3])})
+            else:
+                ldim, odim = ds[latn].dims[0], ds[lonn].dims[0]
+                j = np.where((la_all >= box[2]) & (la_all <= box[3]))[0]
+                i = np.where((lo_all >= box[0]) & (lo_all <= box[1]))[0]
+                if j.size and i.size:
+                    sub = ds.isel({ldim: slice(int(j[0]), int(j[-1]) + 1),
+                                   odim: slice(int(i[0]), int(i[-1]) + 1)})
+
+        u = np.asarray(sub[un].values, dtype=float)
+        v = np.asarray(sub[vn].values, dtype=float)
+        spd = np.sqrt(u ** 2 + v ** 2)
+        if spd.ndim != 3:
+            return {}
+        tname = "valid_time" if "valid_time" in sub else ("time" if "time" in sub else None)
+        tv = np.asarray(sub[tname].values).ravel() if tname else None
+        la = np.asarray(sub[latn].values).ravel()
+        lo = np.asarray(sub[lonn].values).ravel()
+
+        per_t = np.nanmax(spd, axis=(1, 2))
+        k = int(np.nanargmax(per_t))
+        jj, ii = np.unravel_index(np.nanargmax(spd[k]), spd[k].shape)
+        peak_ms = float(per_t[k])
+
+        mean_t = np.nanmean(spd, axis=(1, 2))
+        km = int(np.nanargmax(mean_t))
+        flat = spd[km]
+
+        stations = {}
+        for cn, coord in (("厦门", (118.25, 24.50)), ("崇武", (119.00, 25.00)),
+                          ("晋江", (118.50, 24.50)), ("东山东港", (117.50, 23.75))):
+            ix = int(np.argmin(np.abs(lo - coord[0])))
+            iy = int(np.argmin(np.abs(la - coord[1])))
+            s = spd[:, iy, ix]
+            ks = int(np.nanargmax(s))
+            stations[cn] = {
+                "speed_ms": round(float(s[ks]), 1),
+                "time": str(tv[ks])[:16] if tv is not None else "",
+            }
+
+        return {
+            "box": list(box) if box else None,
+            "peak": {
+                "speed_ms": round(peak_ms, 1),
+                "speed_kmh": round(peak_ms * 3.6),
+                "beaufort": beaufort(peak_ms),
+                "lon": round(float(lo[ii]), 3),
+                "lat": round(float(la[jj]), 3),
+                "time": str(tv[k])[:16] if tv is not None else "",
+            },
+            "mean_peak_ms": round(float(mean_t[km]), 1),
+            "mean_peak_time": str(tv[km])[:16] if tv is not None else "",
+            "counts": {
+                "g6": int(np.nansum(flat >= 10.8)),
+                "g8": int(np.nansum(flat >= 17.2)),
+                "g10": int(np.nansum(flat >= 24.5)),
+                "n": int(flat.size),
+            },
+            "stations": stations,
+            "n_time": int(spd.shape[0]),
+            "lon_range": [round(float(lo.min()), 2), round(float(lo.max()), 2)],
+            "lat_range": [round(float(la.min()), 2), round(float(la.max()), 2)],
+            "start": str(tv[0])[:16] if tv is not None else "",
+            "end": str(tv[-1])[:16] if tv is not None else "",
+        }
+    finally:
+        try:
+            ds.close()
+        except Exception:
+            pass
+
+
+def beaufort(ms: float) -> str:
+    """风速(m/s) → 蒲福风力等级。"""
+    try:
+        v = float(ms)
+    except Exception:
+        return ""
+    for lim, name in ((0.3, "0级"), (1.6, "1级"), (3.4, "2级"), (5.5, "3级"), (8.0, "4级"),
+                      (10.8, "5级"), (13.9, "6级"), (17.2, "7级"), (20.8, "8级"),
+                      (24.5, "9级"), (28.5, "10级"), (32.7, "11级")):
+        if v < lim:
+            return name
+    return "12级以上"
+
+
 # --------------------------------------------------------------------------- #
 # 概览
 # --------------------------------------------------------------------------- #

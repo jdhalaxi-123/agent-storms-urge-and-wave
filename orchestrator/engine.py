@@ -47,12 +47,15 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                     ctx = modules.assess.run(ctx)
                     ctx = modules.brief.run(ctx)
                     ctx = modules.visualize.run(ctx)
+                    _w = ctx.results.get("daily_wind") or {}
                     return {
                         "reply": ctx.results.get("brief", {}).get("markdown", ""),
                         "images": ctx.results.get("visualize", {}).get("images", []),
                         "docx_path": ctx.results.get("brief", {}).get("docx_path"),
                         "brief_template": ctx.results.get("brief", {}).get("template"),
                         "field_query": True,
+                        "wind": ({"file": _w.get("file"), "date": _w.get("date"),
+                                  "size_mb": _w.get("size_mb")} if _w else {}),
                         "meta": ctx.meta,
                     }
             # 场数据不可用 → 退回追问
@@ -115,10 +118,14 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     })
 
     # 汇总返回
+    wind = ctx.results.get("daily_wind") or {}
     return {
         "reply": ctx.results.get("brief", {}).get("markdown", ""),
         "images": ctx.results.get("visualize", {}).get("images", []),
         "docx_path": ctx.results.get("brief", {}).get("docx_path"),
         "brief_template": ctx.results.get("brief", {}).get("template"),
+        # 每日风场（任务三）有独立的更新节奏，单独告知，别和风暴潮预报的时效混在一起说
+        "wind": ({"file": wind.get("file"), "date": wind.get("date"),
+                  "size_mb": wind.get("size_mb")} if wind else {}),
         "meta": ctx.meta,
     }

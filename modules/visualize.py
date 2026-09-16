@@ -225,7 +225,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
             return False
 
         # ===== 场查询/区域预报：出区域分布图（风暴潮/海浪）=====
-        if ctx.request.get("field_query") or ctx.results.get("ai_field"):
+        # 注意：用户明确要别的图（如 wind 风场、surge_station 站点曲线）时，
+        # 不要抢着画区域增水分布图——「问什么画什么」。
+        field_ok = (not plot) or (plot in ("all", "surge_field", "wave"))
+        if field_ok and (ctx.request.get("field_query") or ctx.results.get("ai_field")):
             fp = _draw_ai_field(OUT_DIR, ctx, tag)
             if fp:
                 images.append(str(fp))
