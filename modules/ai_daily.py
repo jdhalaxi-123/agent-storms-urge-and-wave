@@ -26,6 +26,7 @@ import datetime
 import io
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -42,6 +43,8 @@ TIDE_DIR = f"{TOTAL_WATER_DIR}/tide"                                        # �
 STATION_FIELD_DIR = f"{TOTAL_WATER_DIR}/stations_nc"                        # total_water_level_field_站_*.nc
 POINT_SURGE_DIR = f"{DF}/storm_surge_point_system/nc_file"
 POINT_WAVE_DIR = f"{DF}/wave_for_single_point/outputs/nc_file"
+# 每日风场不在 dailyforecast 下，单独在 /group3/wind（约 260 MB/天，是 AI 风暴潮/海浪的驱动）
+WIND_DIR = "/group3/wind"                                                    # atm_forecast_YYYYMMDD.nc
 
 # 站点
 SURGE_STATIONS = {"厦门": "XMN", "崇武": "CWU", "晋江": "JNJ", "东山东港": "DSN"}
@@ -465,6 +468,75 @@ def load_point_wave(code: str = "C6W10", date: str = "") -> Optional[Dict[str, A
 
 
 # --------------------------------------------------------------------------- #
+# ⑦ 每日风场（/group3/wind/atm_forecast_YYYYMMDD.nc，约 260 MB/天）
+# --------------------------------------------------------------------------- #
+def list_wind_dates(force: bool = False) -> List[str]:
+    """可用的每日风场起报日（升序）。"""
+    key = "wind:dates"
+    now = time.time()
+    if not force and key in _mem and now - _mem[key]["t"] < 600:
+        return _mem[key]["v"]
+    try:
+        dates = _dates_from(_ls(WIND_DIR), r"atm_forecast_(\d{8})\.nc")
+    except Exception:
+        dates = []
+    _mem[key] = {"t": now, "v": dates}
+    return dates
+
+
+def wind_latest() -> str:
+    d = list_wind_dates()
+    return d[-1] if d else ""
+
+
+def load_wind(date: str = "", force: bool = False) -> Optional[Dict[str, Any]]:
+    """取回每日风场文件（本地路径）。date 为空取最新起报日。
+
+    注意：单个文件约 260 MB，**首次取用 30~60 秒**，之后走本地缓存秒读。
+    路径：/group3/wind/atm_forecast_YYYYMMDD.nc
+    """
+    key = f"wind:{date or 'latest'}"
+    now = time.time()
+    if not force and key in _mem and now - _mem[key]["t"] < 600:
+        return _mem[key]["v"]
+
+    if not date:
+        date = wind_latest()
+    if not date:
+        return None
+
+    remote = f"{WIND_DIR}/atm_forecast_{date}.nc"
+    try:
+        ftp = fc.ftp_client._connect()
+        try:
+            sz = fc._stat_size(ftp, remote)
+        finally:
+            ftp.quit()
+    except Exception:
+        sz = 0
+    if not sz:
+        return None
+
+    local = fc.fetch(remote, force=force, expected_size=sz)
+    if not local:
+        return None
+
+    info: Dict[str, Any] = {
+        "path": local,
+        "file": os.path.basename(local),
+        "date": date,
+        "size_mb": round(sz / 1e6, 1),
+        "source": "课题三每日风场 /group3/wind（AI 预报的驱动风场）",
+    }
+    try:
+        info["start_dt"] = datetime.datetime.strptime(date, "%Y%m%d")
+    except Exception:
+        pass
+    _mem[key] = {"t": now, "v": info}
+    return info
+
+
+# --------------------------------------------------------------------------- #
 # 概览
 # --------------------------------------------------------------------------- #
 def overview() -> Dict[str, Any]:
@@ -472,13 +544,18 @@ def overview() -> Dict[str, Any]:
     sd = list_surge_dates()
     wd = list_wave_dates()
     td = list_tide_dates()
+    try:
+        nd = list_wind_dates()
+    except Exception:
+        nd = []
     return {
         "surge_field_dates": sd[-6:], "surge_field_latest": sd[-1] if sd else "",
         "surge_field_n": len(sd),
         "wave_field_dates": wd[-6:], "wave_field_latest": wd[-1] if wd else "",
         "wave_field_n": len(wd),
         "tide_dates": td[-6:], "tide_latest": td[-1] if td else "", "tide_n": len(td),
-        "source": "课题三 /group3/dailyforecast（人工智能方法）",
+        "wind_dates": nd[-6:], "wind_latest": nd[-1] if nd else "", "wind_n": len(nd),
+        "source": "课题三 /group3/dailyforecast + /group3/wind（人工智能方法）",
     }
 
 

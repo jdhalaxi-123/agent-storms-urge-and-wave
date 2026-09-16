@@ -17,6 +17,10 @@ OUT_DIR = paths.FIGURES_DIR
 THRESH_LINES = [(30, "蓝色"), (50, "黄色"), (80, "橙色"), (120, "红色")]
 WAVE_THRESH = [(2.5, "蓝色"), (4.0, "黄色"), (6.0, "橙色"), (9.0, "红色")]
 
+# 风场读入内存前的裁剪范围（lon_min, lon_max, lat_min, lat_max），
+# 每日风场文件约 260 MB，先裁再读可显著省内存
+WIND_BOX = (108.0, 136.0, 8.0, 36.0)
+
 
 def _setup_cn_font() -> None:
     try:
@@ -652,21 +656,67 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
         ds = None
         try:
             ds = xr.open_dataset(path, decode_times=True)
-            uvar = "u10" if "u10" in ds.variables else ("wind_x" if "wind_x" in ds.variables else None)
-            vvar = "v10" if "v10" in ds.variables else ("wind_y" if "wind_y" in ds.variables else None)
+            uvar = next((v for v in ("u10", "u10m", "uwnd", "wind_x", "U10")
+                         if v in ds.variables), None)
+            vvar = next((v for v in ("v10", "v10m", "vwnd", "wind_y", "V10")
+                         if v in ds.variables), None)
+            if not uvar or not vvar:
+                uvar = next((v for v in ds.variables
+                             if v.lower() in ("u", "u_component_of_wind")), None)
+                vvar = next((v for v in ds.variables
+                             if v.lower() in ("v", "v_component_of_wind")), None)
             if not uvar or not vvar:
                 continue
+            latname = lonname = None
             latv = lonv = None
             for cand in ("latitude", "lat"):
                 if cand in ds.variables:
+                    latname = cand
                     latv = np.asarray(ds[cand].values).ravel()
                     break
             for cand in ("longitude", "lon"):
                 if cand in ds.variables:
+                    lonname = cand
                     lonv = np.asarray(ds[cand].values).ravel()
                     break
             if latv is None or lonv is None:
                 continue
+
+            # 大文件友好（每日风场约 260 MB）：先按关注区适当外扩裁剪，再读进内存。
+            # 兼容两种网格：① lat/lon 本身是维度（常规 NetCDF，可直接 sel）
+            #               ② lat/lon 是沿 xi/eta 的辅助坐标（ROMS 风场，需按索引 isel）
+            try:
+                la = np.asarray(ds[latname].values).ravel()
+                lo = np.asarray(ds[lonname].values).ravel()
+                if la.size > 4 and lo.size > 4:
+                    la0, la1 = float(np.nanmin(la)), float(np.nanmax(la))
+                    lo0, lo1 = float(np.nanmin(lo)), float(np.nanmax(lo))
+                    if (la0 < WIND_BOX[3] and la1 > WIND_BOX[2]
+                            and lo0 < WIND_BOX[1] and lo1 > WIND_BOX[0]):
+                        ds2 = None
+                        if latname in ds.dims and lonname in ds.dims:
+                            lat_slice = slice(max(la0, WIND_BOX[2]), min(la1, WIND_BOX[3]))
+                            lon_slice = slice(max(lo0, WIND_BOX[0]), min(lo1, WIND_BOX[1]))
+                            if la[0] > la[-1]:
+                                lat_slice = slice(lat_slice.stop, lat_slice.start)
+                            if lo[0] > lo[-1]:
+                                lon_slice = slice(lon_slice.stop, lon_slice.start)
+                            ds2 = ds.sel({latname: lat_slice, lonname: lon_slice})
+                        else:
+                            ldim = ds[latname].dims[0]
+                            odim = ds[lonname].dims[0]
+                            j = np.where((la >= WIND_BOX[2]) & (la <= WIND_BOX[3]))[0]
+                            i = np.where((lo >= WIND_BOX[0]) & (lo <= WIND_BOX[1]))[0]
+                            if j.size >= 3 and i.size >= 3:
+                                ds2 = ds.isel({ldim: slice(int(j[0]), int(j[-1]) + 1),
+                                               odim: slice(int(i[0]), int(i[-1]) + 1)})
+                        if ds2 is not None and ds2[latname].size > 2 and ds2[lonname].size > 2:
+                            ds = ds2
+                latv = np.asarray(ds[latname].values).ravel()
+                lonv = np.asarray(ds[lonname].values).ravel()
+            except Exception:
+                latv = np.asarray(ds[latname].values).ravel()
+                lonv = np.asarray(ds[lonname].values).ravel()
             nlat, nlon = len(latv), len(lonv)
             uarr = np.asarray(ds[uvar].values, dtype=float)
             varr = np.asarray(ds[vvar].values, dtype=float)

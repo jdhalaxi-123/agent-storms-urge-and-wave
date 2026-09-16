@@ -1258,6 +1258,14 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 _attach_wave(ctx)
             return ctx
 
+    # ⭐⭐⭐ 每日风场：用户要看风场时，按需取当天的 /group3/wind/atm_forecast_YYYYMMDD.nc
+    # （非台风查询一律以「当天风场」为准，避免误用本地遗留的旧风场文件）
+    if not ftp_ty and _wants_wind(ctx):
+        try:
+            _attach_daily_wind(ctx, target_date)
+        except Exception as e:  # noqa: BLE001
+            print(f"[geo_stats] 每日风场取数失败: {e}")
+
     # ⭐⭐⭐⭐ 常规（非台风个例）查询 → 用「当天的」AI 每日预报
     if not ctx.files.get("ftp_typhoon") and not ctx.request.get("field_query"):
         try:
@@ -1325,6 +1333,48 @@ def run(ctx: ModuleContext) -> ModuleContext:
 # --------------------------------------------------------------------------- #
 # ④ 台风期间数据（FTP 按需取数）
 # --------------------------------------------------------------------------- #
+def _wants_wind(ctx: ModuleContext) -> bool:
+    """用户是否要看风场（plot=wind/all，或灾种就是风场）。"""
+    plot = str(ctx.request.get("plot", "") or "").strip().lower()
+    disaster = str(ctx.request.get("disaster", "") or "").strip().lower()
+    if plot in ("wind", "all"):
+        return True
+    if disaster in ("wind", "风场", "风"):
+        return True
+    return False
+
+
+def _attach_daily_wind(ctx: ModuleContext, target_date=None) -> Optional[Dict[str, Any]]:
+    """把当天的每日风场（/group3/wind）挂到 ctx.files["wind_files"]，供出图用。
+
+    文件约 260 MB，首次取用 30~60 秒（之后走 stormdata 缓存）。
+    """
+    from . import ai_daily
+
+    want = ""
+    if target_date is not None:
+        try:
+            want = target_date.strftime("%Y%m%d")
+        except Exception:
+            want = ""
+    dates = ai_daily.list_wind_dates()
+    if not dates:
+        return None
+    if want and want in dates:
+        date = want
+    else:
+        # 取不晚于目标日期的最近一次；没有就用最新的
+        earlier = [d for d in dates if not want or d <= want]
+        date = earlier[-1] if earlier else dates[-1]
+
+    w = ai_daily.load_wind(date)
+    if not w or not w.get("path"):
+        return None
+    ctx.files["wind_files"] = [w["path"]]
+    ctx.results["daily_wind"] = w
+    return w
+
+
 def _run_ftp_typhoon(ctx: ModuleContext, typhoon: str, region: str,
                      target_date: Optional[datetime.date] = None) -> Optional[Dict[str, Any]]:
     """从 FTP 拉取该台风期间的数据并组装成站点结构。
