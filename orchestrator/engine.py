@@ -28,8 +28,35 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     region = slots.get("region", "")
     chk = geo_domain.check_region(region, slots.get("lon"), slots.get("lat"))
     if not chk.get("ok"):
-        msg = chk.get("message", "")
         reason = chk.get("reason", "out_of_domain")
+        # ⭐ 大范围区域：若有「场数据」能力，**不再追问**，改为直接出该区域的场分布
+        if reason == "need_clarify":
+            box = geo_domain.region_box(region)
+            if box:
+                slots["field_query"] = True
+                slots["field_box"] = [float(x) for x in box]
+                slots["broad_region"] = chk.get("matched") or region
+                slots["region"] = str(chk.get("matched") or region)
+                memory.append({"request": raw or slots.get("raw", ""), "slots": slots,
+                               "field_query": chk.get("matched")})
+                routes = router.resolve(slots)
+                ctx = ModuleContext(request=slots, routes=routes)
+                ctx = modules.meta.run(ctx)
+                ctx = modules.geo_stats.run(ctx)
+                if (ctx.results.get("geo_stats") or {}).get("field_stats"):
+                    ctx = modules.assess.run(ctx)
+                    ctx = modules.brief.run(ctx)
+                    ctx = modules.visualize.run(ctx)
+                    return {
+                        "reply": ctx.results.get("brief", {}).get("markdown", ""),
+                        "images": ctx.results.get("visualize", {}).get("images", []),
+                        "docx_path": ctx.results.get("brief", {}).get("docx_path"),
+                        "brief_template": ctx.results.get("brief", {}).get("template"),
+                        "field_query": True,
+                        "meta": ctx.meta,
+                    }
+            # 场数据不可用 → 退回追问
+        msg = chk.get("message", "")
         memory.append({
             "request": raw or slots.get("raw", ""),
             "slots": slots,

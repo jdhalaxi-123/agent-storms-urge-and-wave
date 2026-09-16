@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -993,11 +994,96 @@ def _parse_window_hours(tw: str) -> Optional[int]:
     return n  # 小时
 
 
+# --------------------------------------------------------------------------- #
+# ⑤ 场查询（区域查询）：大范围地名 → 出场分布 + 空间统计
+# --------------------------------------------------------------------------- #
+def _run_field_query(ctx: ModuleContext, box: list, region: str) -> Optional[Dict[str, Any]]:
+    """用课题三「每日 AI 预报」的场数据回答区域性问题。
+
+    - 风暴潮：`surge_pred_atm_forecast_*.nc`（168h, 0.25°, `surge` cm）
+    - 海浪  ：`YYYYMMDD_wave_forecast_1h.nc`（144h, `hs_torch` m）
+    产出：区域内过程最大值的空间统计 + 区域内最大点的时间序列（供曲线/判级）
+    """
+    from . import ai_daily
+
+    box = tuple(box) if box else None
+    disaster = str(ctx.request.get("disaster", "storm_surge") or "storm_surge")
+    date = str(ctx.request.get("date", "") or "")
+    m = re.search(r"(\d{4})-?(\d{2})-?(\d{2})", date)
+    date = f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else ""
+
+    if disaster == "wave":
+        fld = ai_daily.load_wave_field(date)
+        st = ai_daily.wave_field_stats(fld, box) if fld else {}
+        kind, unit = "wave", "m"
+    else:
+        fld = ai_daily.load_surge_field(date)
+        st = ai_daily.field_stats(fld, box) if fld else {}
+        kind, unit = "surge", "cm"
+    if not fld or not st:
+        return None
+
+    # 区域内最大点的时序（逐时刻对区域取最大）—— 供过程曲线与峰值时刻
+    lat, lon = fld["lat"], fld["lon"]
+    LON, LAT = np.meshgrid(lon, lat)
+    mask = np.ones(LAT.shape, dtype=bool)
+    if box:
+        mask = (LON >= box[0]) & (LON <= box[1]) & (LAT >= box[2]) & (LAT <= box[3])
+    arr = fld["hs_m"] if kind == "wave" else fld["surge_cm"]
+    if arr.ndim == 2:
+        arr = arr[None, ...]
+    sub = arr[:, mask]
+    series = np.nanmax(sub, axis=1) if sub.size else np.asarray([])
+    start = fld.get("start_dt")
+
+    site = {
+        "name": f"{region}（区域最大）", "short": region, "code": "BOX",
+        "lon": st.get("peak_lon"), "lat": st.get("peak_lat"),
+        "start_dt": start,
+        "series_cm": series.tolist() if kind == "surge" else [],
+        "series_full": _fill_gaps(series).tolist() if kind == "surge" else [],
+        "series_wave_m": series.tolist() if kind == "wave" else [],
+        "data_kind": f"{region}区域内最大网格点的过程",
+    }
+
+    geo = _finalize([site], region, "ai_field", fld.get("file", ""))
+    geo["field_query"] = True
+    geo["field_kind"] = kind
+    geo["field_unit"] = unit
+    geo["field_stats"] = st
+    geo["field_box"] = list(box) if box else None
+    geo["field_grid"] = {"lat_min": float(lat.min()), "lat_max": float(lat.max()),
+                         "lon_min": float(lon.min()), "lon_max": float(lon.max()),
+                         "n_lat": int(lat.size), "n_lon": int(lon.size),
+                         "res": round(float(abs(lon[1] - lon[0])) if lon.size > 1 else 0.25, 3)}
+    geo["field_source"] = fld.get("source", "")
+    geo["field_date"] = fld.get("date", "")
+    geo["data_source"] = "课题三 每日人工智能预报"
+    if start and len(series):
+        geo["data_start"] = start.strftime("%Y-%m-%d %H:%M")
+        geo["data_end"] = (start + datetime.timedelta(hours=len(series) - 1)).strftime("%Y-%m-%d %H:%M")
+
+    ctx.results["ai_field"] = {"kind": kind, "field": fld, "stats": st, "box": box}
+    return geo
+
+
 def run(ctx: ModuleContext) -> ModuleContext:
     region = ctx.request.get("region", "未知海域")
     typhoon = ctx.results.get("meta", {}).get("typhoon", "") or ""
     hours = _parse_window_hours(ctx.request.get("time_window", ""))
     target_date = _parse_target_date(ctx.request.get("date", ""))
+
+    # ⭐⭐⭐ 场查询（区域性问题）：大范围地名 → 出场分布 + 空间统计
+    if ctx.request.get("field_query"):
+        try:
+            geo = _run_field_query(ctx, ctx.request.get("field_box") or [], region)
+            if geo:
+                ctx.results["geo_stats"] = geo
+                if not (ctx.results.get("wave_stats") or {}).get("status") == "ok":
+                    _attach_wave(ctx)
+                return ctx
+        except Exception as e:  # noqa: BLE001
+            print(f"[geo_stats] 场查询失败: {e}")
 
     # ⭐⭐⭐ 台风期间数据（FTP 按需取数）—— 点名了 FTP 上的完整台风时优先
     ftp_ty = ctx.files.get("ftp_typhoon")

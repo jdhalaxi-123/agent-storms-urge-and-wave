@@ -127,10 +127,117 @@ def judge_wave_level(hs_m: float) -> str:
     return "无"
 
 
+def _field_brief(ctx: ModuleContext, geo: dict, region: str) -> Optional[Dict[str, Any]]:
+    """场查询（区域性问题）的简报：**用空间分布的方式描述**，而不是只报一个点。
+
+    产出：区域峰值、出现位置与时刻、分级格点数、站点对照。
+    """
+    st = geo.get("field_stats") or {}
+    if not st:
+        return None
+    is_wave = geo.get("field_kind") == "wave"
+    unit = "m" if is_wave else "cm"
+    vmax = st.get("max_m") if is_wave else st.get("max_cm")
+    vmean = st.get("mean_m") if is_wave else st.get("mean_cm")
+    pk_dt = st.get("peak_dt")
+    L = st.get("levels") or {}
+    n = st.get("n_cells") or 0
+    grid = geo.get("field_grid") or {}
+
+    if is_wave:
+        segs = [("红色(≥9m)", L.get("红色(≥9m)", 0)), ("橙色(6~9m)", L.get("橙色(6~9m)", 0)),
+                ("黄色(4~6m)", L.get("黄色(4~6m)", 0)), ("蓝色(2.5~4m)", L.get("蓝色(2.5~4m)", 0))]
+        lvl = ("红色" if vmax >= 9 else "橙色" if vmax >= 6 else "黄色" if vmax >= 4
+               else "蓝色" if vmax >= 2.5 else "无")
+        seg_txt = "；".join(f"{k} **{v}** 个格点" for k, v in segs if v) or "区域内各点均未达海浪预警阈值"
+    else:
+        segs = [("红色(≥120cm)", L.get("红色(≥120cm)", 0)), ("橙色(80~120cm)", L.get("橙色(80~120cm)", 0)),
+                ("黄色(50~80cm)", L.get("黄色(50~80cm)", 0)), ("蓝色(30~50cm)", L.get("蓝色(30~50cm)", 0))]
+        lvl = ("红色" if vmax >= 120 else "橙色" if vmax >= 80 else "黄色" if vmax >= 50
+               else "蓝色" if vmax >= 30 else "无")
+        seg_txt = "；".join(f"{k} **{v}** 个格点" for k, v in segs if v) \
+            or "区域内各点均未达风暴潮增水预警阈值（30cm）"
+
+    hours = st.get("n_hours") or (len((geo.get("sites") or [{}])[0].get("series_full") or []))
+    peak_place = f"{st.get('peak_lon')}°E, {st.get('peak_lat')}°N"
+    rb = geo.get("field_box")
+    box_txt = f"（{rb[0]}~{rb[1]}°E，{rb[2]}~{rb[3]}°N）" if rb else ""
+    title = f"{region}{'海浪' if is_wave else '风暴潮'}{'警报' if lvl != '无' else '预报'}"
+    summary = (
+        f"基于课题三每日人工智能预报，{region}海域{box_txt}"
+        + (f"未来 {hours} 小时内，" if hours else "")
+        + f"**过程最大{'有效波高' if is_wave else '风暴增水'}为 {vmax} {unit}**，"
+        f"出现在 **{peak_place}**"
+        + (f"（{pk_dt:%m-%d %H:%M}）" if pk_dt else "") + f"；区域平均 {vmean} {unit}。\n\n"
+        f"**空间分布**：{seg_txt}（区域内共 {n} 个有效网格点，分辨率 {grid.get('res')}°）。"
+    )
+    note = (
+        f"注：本简报为**区域（面）预报**，不是单点预报 —— 数据取自课题三每日人工智能预报场"
+        f"（{'海浪 hs_torch' if is_wave else '风暴潮增水 surge'}），起报日 {geo.get('field_date')}，"
+        f"覆盖 {grid.get('lon_min')}~{grid.get('lon_max')}°E / {grid.get('lat_min')}~{grid.get('lat_max')}°N，"
+        f"分辨率 {grid.get('res')}°。判级标准："
+        f"{'有效波高分级（蓝2.5/黄4.0/橙6.0/红9.0 m）' if is_wave else '风暴增水分级（蓝30/黄50/橙80/红120 cm）'}。"
+        f"区域内站点位置已在图上标出；如需具体站点的过程曲线，请指定站点名（厦门/崇武/晋江/东山东港）。"
+    )
+    return {
+        "template_type": "wave_alert" if is_wave else "storm_surge_alert",
+        "agency": "自然资源部厦门海洋预报台",
+        "title": title,
+        "time": "（生成时刻）",
+        "number": "",
+        "signer": "",
+        "basis": "《自然资源部厦门海洋中心海洋灾害应急执行预案（风暴潮、海浪、海啸）》",
+        "summary": summary,
+        "data_range": _data_range_text(ctx, geo),
+        "stations": [] if is_wave else [{
+            "station": f"{region}区域峰值",
+            "date": pk_dt.strftime("%Y-%m-%d") if pk_dt else "",
+            "time": pk_dt.strftime("%m-%d %H:%M") if pk_dt else "",
+            "high_tide_cm": vmax,
+            "warn": "30/50/80/120(增水分级)",
+            "level": lvl,
+        }],
+        "segments": [{"region": f"{region}（区域峰值）",
+                      "description": f"{'有效波高' if is_wave else '最大增水'}约 {vmax} {unit}",
+                      "level": "未达到预警级别" if lvl == "无" else f"{lvl}预警"}] if is_wave else [],
+        "notice": "请沿海各有关单位密切关注我台后续风暴潮预警报。",
+        "tip": "预警提示：请沿海相关部门关闭危险区域的海滨浴场和休闲娱乐场所，加固薄弱危险区域的海堤等设施，做好防潮准备和应急措施。",
+        "note": note,
+        "targets": "市委办、市政府办、市防汛办",
+        "contact": "陶小琴",
+        "phone": "0592－2065005，18705925573",
+        "fax": "0592—5905381",
+        "website": "http://www.fjocean.com",
+    }
+
+
 def run(ctx: ModuleContext) -> ModuleContext:
     geo = ctx.results.get("geo_stats", {}) or {}
     sites = geo.get("sites", []) or []
     src = geo.get("source", "")
+
+    # ⭐ 场查询（区域性问题）：走空间分布描述，不走单点判级
+    if geo.get("field_query") and geo.get("field_stats"):
+        region = ctx.request.get("region", "未指定海域")
+        bd = _field_brief(ctx, geo, region)
+        if bd:
+            st = geo["field_stats"]
+            is_wave = geo.get("field_kind") == "wave"
+            vmax = st.get("max_m") if is_wave else st.get("max_cm")
+            lvl = ("红色" if (is_wave and vmax >= 9) or (not is_wave and vmax >= 120) else
+                   "橙色" if (is_wave and vmax >= 6) or (not is_wave and vmax >= 80) else
+                   "黄色" if (is_wave and vmax >= 4) or (not is_wave and vmax >= 50) else
+                   "蓝色" if (is_wave and vmax >= 2.5) or (not is_wave and vmax >= 30) else "无")
+            ctx.results["assess"] = {
+                "status": "ok", "field_query": True,
+                "level": "未达到预警阈值" if lvl == "无" else f"{lvl}预警",
+                "risk": "区域内存在风险点" if lvl != "无" else "区域风险较低",
+                "basis": (f"区域过程最大{'浪高' if is_wave else '增水'} {vmax}"
+                          f"{'m' if is_wave else 'cm'}（{st.get('peak_lon')}°E,{st.get('peak_lat')}°N）"),
+                "max_surge_cm": st.get("max_cm"), "max_hs_m": st.get("max_m"),
+                "field_stats": st, "brief_data": bd,
+            }
+            return ctx
 
     if geo.get("status") != "ok" or not sites:
         # 无数据降级：骨架占位，保证链路不中断

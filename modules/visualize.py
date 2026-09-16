@@ -58,8 +58,119 @@ def _tag(ctx: ModuleContext) -> str:
     return "_".join(parts) if parts else "全部"
 
 
+def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
+    """场查询：绘制区域内**过程最大增水/浪高**的空间分布图。
+
+    数据来自课题三每日 AI 预报（风暴潮 `surge` cm / 海浪 `hs_torch` m）。
+    按用户问的区域裁剪显示范围，并在图上标出区域峰值位置。
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    info = ctx.results.get("ai_field") or {}
+    fld = info.get("field")
+    st = info.get("stats") or {}
+    box = info.get("box")
+    if not fld or not st:
+        return ""
+
+    lat, lon = fld["lat"], fld["lon"]
+    is_wave = info.get("kind") == "wave"
+    arr = fld["hs_m"] if is_wave else fld["surge_cm"]
+    if arr.ndim == 2:
+        arr = arr[None, ...]
+    mx = np.nanmax(arr, axis=0)
+    LON, LAT = np.meshgrid(lon, lat)
+    if box:
+        m = (LON >= box[0]) & (LON <= box[1]) & (LAT >= box[2]) & (LAT <= box[3])
+        mx = np.where(m, mx, np.nan)
+
+    region = ctx.request.get("region", "")
+    unit = "m" if is_wave else "cm"
+    label = "过程最大有效波高 (m)" if is_wave else "过程最大风暴增水 (cm)"
+    cmap = "YlOrRd"
+    finite = mx[np.isfinite(mx)]
+    vmax_abs = float(np.nanmax(finite)) if finite.size else 1.0
+    # 色标上限取真实最大值（略微上取整），保证峰值在色标上可分辨；
+    # 只有异常离群点占多数时才退回 99 分位
+    p99 = float(np.nanpercentile(finite, 99)) if finite.size else 1.0
+    vmax = vmax_abs if vmax_abs <= p99 * 1.6 else p99
+    vmax = max(vmax, 1.0)
+    vmin = 0.0
+    # 预警阈值参考线（放在色标旁边，便于对照）
+    ths = [2.5, 4.0, 6.0, 9.0] if is_wave else [30, 50, 80, 120]
+
+    fig, ax = plt.subplots(figsize=(7.6, 5.2), dpi=110)
+    pc = ax.pcolormesh(LON, LAT, mx, cmap=cmap, vmin=vmin, vmax=vmax, shading="auto")
+    cb = fig.colorbar(pc, ax=ax, shrink=0.9, pad=0.02)
+    cb.set_label(label, fontsize=9)
+    for t in ths:
+        if vmin < t < vmax:
+            cb.ax.axhline(t, color="#1f4fd6", lw=1.0, ls="--", alpha=0.9)
+            cb.ax.text(1.6, t, f"{t}{unit}", transform=cb.ax.get_yaxis_transform(),
+                       fontsize=7, color="#1f4fd6", va="center")
+
+    # 区域峰值标注（放在图内，避免被裁切）
+    if st.get("peak_lon") is not None:
+        plo, pla = st["peak_lon"], st["peak_lat"]
+        pk = st.get("max_m") if is_wave else st.get("max_cm")
+        ax.plot([plo], [pla], marker="*", markersize=16, color="#d6001c",
+                markeredgecolor="white", markeredgewidth=1.0, zorder=6)
+        xr_ = (max(LON[np.isfinite(mx)], default=box[1] if box else 128) -
+               min(LON[np.isfinite(mx)], default=box[0] if box else 114)) or 1
+        # 峰值靠近右/上边界时把标签放左下
+        if box:
+            dx = (box[1] - box[0]) * 0.30
+            dy = (box[3] - box[2]) * 0.14
+            tx, ty = (plo - dx, pla - dy) if plo > (box[0] + box[1]) / 2 else (plo + dx * 0.15, pla + dy)
+        else:
+            tx, ty = plo + 0.8, pla + 0.4
+        ax.annotate(f"区域峰值 {pk} {unit}\n({plo}°E, {pla}°N)",
+                    xy=(plo, pla), xytext=(tx, ty), fontsize=8.5, color="#d6001c",
+                    ha="center", va="center", zorder=7,
+                    bbox=dict(fc="white", alpha=0.82, ec="#d6001c", lw=0.7, pad=2.5),
+                    arrowprops=dict(arrowstyle="->", color="#d6001c", lw=1.0))
+    # 并列显示的区域站点位置
+    for nm, (slo, sla) in (("厦门", (118.25, 24.50)), ("崇武", (119.00, 25.00)),
+                           ("晋江", (118.50, 24.50)), ("东山", (117.50, 23.75))):
+        if box and not (box[0] <= slo <= box[1] and box[2] <= sla <= box[3]):
+            continue
+        ax.plot([slo], [sla], marker="o", markersize=3.2, color="#1f4fd6", zorder=5)
+
+    typh = str(ctx.request.get("typhoon", "") or "")
+    date_txt = st.get("peak_dt")
+    title = f"{region} {label.split('(')[0].strip()}空间分布"
+    if typh:
+        title = f"{typh} 号台风 · " + title
+    if date_txt:
+        title += f"（起报 {fld.get('date')}）"
+    ax.set_title(title, fontsize=11)
+    ax.set_xlabel("经度 (°E)", fontsize=9)
+    ax.set_ylabel("纬度 (°N)", fontsize=9)
+    ax.tick_params(labelsize=8)
+    if box:
+        ax.set_xlim(box[0], box[1])
+        ax.set_ylim(box[2], box[3])
+    ax.set_aspect("equal", adjustable="box")
+    n_t = fld.get("n_times")
+    sub_txt = (f"区域最大 {st.get('max_m') if is_wave else st.get('max_cm')} {unit}"
+               f"　格点 {st.get('n_cells')} 个　时长 {n_t} 小时")
+    ax.text(0.01, 0.02, sub_txt, transform=ax.transAxes, fontsize=8,
+            color="#333333", bbox=dict(fc="white", alpha=0.7, ec="#cccccc"))
+    fig.tight_layout(pad=1.0)
+    # 文件名带上区域名，避免不同区域的图互相覆盖
+    rgn_tag = "".join(ch for ch in str(region) if ch.isalnum() or ch in "东南西北海峡")[:10] or "区域"
+    out = OUT_DIR / f"field_ai_{('wave' if is_wave else 'surge')}_{rgn_tag}_{tag}.png"
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+    return str(out)
+
+
 def _mark_point(ax, ctx: ModuleContext):
     """在空间分布图上标注用户查询的目标点。"""
+
     pt = ctx.request.get("point")
     if not (isinstance(pt, (list, tuple)) and len(pt) >= 2):
         return
@@ -106,6 +217,12 @@ def run(ctx: ModuleContext) -> ModuleContext:
             if kind == "surge_station":
                 return disaster != "wave"
             return False
+
+        # ===== 场查询：区域分布图（风暴潮/海浪）=====
+        if ctx.request.get("field_query"):
+            fp = _draw_ai_field(OUT_DIR, ctx, tag)
+            if fp:
+                images.append(str(fp))
 
         # ===== 海浪波高曲线 =====
         if want("wave"):
