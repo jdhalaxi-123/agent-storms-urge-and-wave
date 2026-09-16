@@ -1182,13 +1182,27 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
         if not fld or not st:
             return None
         # ⭐ 站点问题给**站点序列**：取该点最近格点的逐时浪高/周期/波向
-        #   （用户问"厦门的海浪"，要的是厦门这个点的过程，不是一片区域场）
+        #   ⚠️ 但必须取"最近的**有效（海上）**格点"：
+        #   这个浪场是 0.352°×0.238°（约 35×26 km），厦门近岸的最近格点常被
+        #   掩膜判为陆地（曾导致"厦门沿海海浪无数据"），所以要跳过全 NaN 的格点。
         lon_a = np.asarray(fld["lon"], dtype=float)
         lat_a = np.asarray(fld["lat"], dtype=float)
-        ix = int(np.argmin(np.abs(lon_a - lo)))
-        iy = int(np.argmin(np.abs(lat_a - la)))
+        hs_arr = np.asarray(fld["hs_m"], dtype=float)
+        valid = np.isfinite(hs_arr).any(axis=0)        # 该格点是否至少有一个时次有效
+        LONa, LATa = np.meshgrid(lon_a, lat_a)
+        search = 1.5                                    # 搜索半径（度）
+        cand = ((np.abs(LONa - lo) <= search) & (np.abs(LATa - la) <= search) & valid)
+        if cand.any():
+            jj, ii = np.where(cand)
+            d = np.hypot(LONa[jj, ii] - lo, LATa[jj, ii] - la)
+            k = int(np.argmin(d))
+            iy, ix = int(jj[k]), int(ii[k])
+        else:                                           # 附近没有有效格点 → 退回最近格点
+            ix = int(np.argmin(np.abs(lon_a - lo)))
+            iy = int(np.argmin(np.abs(lat_a - la)))
         pt_lon, pt_lat = float(lon_a[ix]), float(lat_a[iy])
-        arr_pt = fld["hs_m"][:, iy, ix]
+        dist_km = round(float(np.hypot(pt_lon - lo, pt_lat - la) * 111), 1)
+        arr_pt = hs_arr[:, iy, ix]
         series = np.asarray(arr_pt, dtype=float)
         start = fld.get("start_dt")
         lb = name or region
@@ -1198,7 +1212,8 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
                 "series_cm": [], "series_full": [],
                 "series_wave_m": [None if not np.isfinite(v) else round(float(v), 2)
                                   for v in series],
-                "data_kind": f"课题三 AI 海浪场（最近格点 {pt_lon:.2f}°E, {pt_lat:.2f}°N）"}
+                "data_kind": (f"课题三 AI 海浪场（最近有效海上格点 "
+                              f"{pt_lon:.2f}°E, {pt_lat:.2f}°N，距 {lb} 约 {dist_km:.0f} km）")}
         geo = _finalize([site], region, "ai_point", fld.get("file", ""))
         geo["point_query"] = True
         geo["ai_daily"] = True
@@ -1206,8 +1221,9 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
         # 这是**模式场最近格点**，不是"海浪单点"产品（那套是浮标站号），
         # 出图时要标注清楚，别让人以为拿到了浮标数据。
         geo["grid_point"] = True
-        geo["point_grid"] = {"lon": pt_lon, "lat": pt_lat,
-                            "dist_km": round(float(np.hypot(pt_lon - lo, pt_lat - la) * 111), 1)}
+        geo["point_grid"] = {"lon": pt_lon, "lat": pt_lat, "dist_km": dist_km,
+                             "grid_res": "0.352°×0.238°（约35×26 km）",
+                             "nearest_valid": True}
         geo["data_source"] = "课题三 每日人工智能预报"
         geo["field_date"] = fld.get("date", "")
         geo["freshness"] = fresh
@@ -1250,8 +1266,10 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
                 "max_hs_m": round(float(np.nanmax(series)), 2),
                 "peak_hour": k,
                 "peak_time": peak_t,
-                # 注意：这里是**模式最近格点**，不是浮标站，不要写成"浮标站 XXX"
-                "source": f"课题三 每日 AI 海浪场（{lb} 最近格点 {pt_lon:.2f}°E, {pt_lat:.2f}°N）",
+                # 注意：这里是**模式场最近有效海上格点**，不是浮标站，不要写成"浮标站 XXX"
+                "source": (f"课题三 每日 AI 海浪场（{lb} 最近有效海上格点 "
+                           f"{pt_lon:.2f}°E, {pt_lat:.2f}°N，距 {dist_km:.0f} km，"
+                           f"网格约 35×26 km）"),
                 "point_name": lb,
             }
         if start and len(series):
