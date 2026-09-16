@@ -212,13 +212,14 @@ def _mark_query_place(ax, ctx, extent=None, zorder: int = 12) -> None:
     if extent and not (extent[0] <= qlo <= extent[1] and extent[2] <= qla <= extent[3]):
         return
     try:
-        ax.plot([qlo], [qla], marker="*", markersize=26, color="#e60000",
-                markeredgecolor="white", markeredgewidth=1.3, zorder=zorder,
+        ax.plot([qlo], [qla], marker="*", markersize=22, color="#e60000",
+                markeredgecolor="white", markeredgewidth=0.8, zorder=zorder,
                 label=f"{qn}（查询点）")
-        ax.annotate(f"★ {qn}" if qn else f"★ ({qlo:.2f}°E, {qla:.2f}°N)",
-                    xy=(qlo, qla), xytext=(9, -14), textcoords="offset points",
-                    fontsize=12, fontweight="bold", color="#e60000", zorder=zorder + 1,
-                    bbox=dict(fc="white", alpha=0.88, ec="#e60000", lw=0.9, pad=2.2))
+        # 只写字，不加方框：一颗星 + 一个地名
+        ax.annotate(qn or f"{qlo:.2f}°E, {qla:.2f}°N",
+                    xy=(qlo, qla), xytext=(11, -5), textcoords="offset points",
+                    fontsize=14, fontweight="bold", color="#e60000",
+                    zorder=zorder + 1)
     except Exception:
         pass
 
