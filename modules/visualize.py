@@ -270,7 +270,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
                     images.append(str(p))
 
         # ===== 全场增水空间分布图（数值 + AI/融合 + 差异） =====
-        if want("surge_field"):
+        # 每日区域查询已经用 AI 当天场画过区域分布图（ai_field），
+        # 不要再用本地遗留的个例文件画一遍（曾出现"问福建沿海的场，
+        # 画出来的是 2526 台风旧场图"）。
+        if want("surge_field") and not ctx.results.get("ai_field"):
             field_imgs = _draw_field_map(OUT_DIR, ctx, tag)
             images.extend(field_imgs)
 

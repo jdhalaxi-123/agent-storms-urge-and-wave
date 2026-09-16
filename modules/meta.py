@@ -135,12 +135,25 @@ def run(ctx: ModuleContext) -> ModuleContext:
     m_ty = _re.search(r"(\d{3,4})", req_ty)
     req_id = m_ty.group(1) if m_ty else ""
 
+    # ⭐ 没点名台风 = 每日预报类问题：**不要**绑定本地遗留的台风文件。
+    #    （原实现在这里默认 target="2526"，导致"问福建沿海的场"画出来的
+    #      是 2526 台风的旧场图；每日预报一律走 FTP 上的当天数据。）
+    if not req_id:
+        ctx.results["meta"] = {
+            "status": "daily",
+            "root": str(root),
+            "typhoon": "",
+            "request_typhoon": "",
+            "total": len(found),
+            "note": "未点名台风 → 走每日 AI 预报（FTP 当天数据），不使用本地遗留 nc",
+        }
+        return ctx
+
     by_kind: Dict[str, List[Dict[str, Any]]] = {"station": [], "surge": [], "wave": [], "wind": [], "other": []}
     for f in found:
         by_kind[_classify(f["name"], f.get("rel", ""))].append(f)
 
-    # 目标台风数据筛选（默认 2526）
-    target = req_id or "2526"
+    target = req_id
     ctx.files["surge_files"] = [f["path"] for f in by_kind["surge"]
                                 if target in f["rel"].replace("\\", "/")]
     ctx.files["wave_files"] = [f["path"] for f in by_kind["wave"]
