@@ -316,7 +316,11 @@ REGION_BOXES = {
     "闽南": (117.0, 119.2, 23.4, 25.4),
     "闽南沿海": (117.0, 119.2, 23.4, 25.4),
     "闽东": (119.0, 121.2, 25.4, 27.6),
+    "闽东沿海": (119.0, 121.2, 25.4, 27.6),
     "闽中": (118.4, 120.2, 24.6, 26.2),
+    "闽中沿海": (118.4, 120.2, 24.6, 26.2),
+    "闽北": (119.4, 121.2, 26.2, 28.2),
+    "闽北沿海": (119.4, 121.2, 26.2, 28.2),
     "南海": (110.0, 120.0, 12.0, 22.0),
     "东海": (120.0, 127.5, 25.0, 30.0),
 }
@@ -326,7 +330,8 @@ FIELD_CAPABLE_BROAD = {
     "台湾", "台湾省", "台湾岛", "台湾地区", "台湾沿海", "台湾周边", "台湾海峡",
     "福建", "福建省", "浙江", "浙江沿海", "广东", "广东沿海", "粤东",
     "中国沿海", "全国沿海", "东南沿海", "华东沿海", "华南沿海",
-    "近海", "沿岸", "沿海地区", "闽南", "闽南沿海", "闽东", "闽中", "东海",
+    "近海", "沿岸", "沿海地区", "闽南", "闽南沿海", "闽东", "闽东沿海",
+    "闽中", "闽中沿海", "闽北", "闽北沿海", "东海",
 }
 
 
@@ -340,6 +345,28 @@ def is_buoy_code(text: str) -> bool:
     否则会被当成坐标（"C6W10" → 6°E,10°N）而误判"超出范围"。
     """
     return bool(_BUOY_CODE_RE.match(str(text or "").strip()))
+
+
+# 动态框：以某地点为中心、东南西北各 half_deg 度（0.8° ≈ 90 km）
+DYNAMIC_HALF_DEG = 0.8
+
+
+def dynamic_box(region: str, half_deg: float = DYNAMIC_HALF_DEG) -> Optional[tuple]:
+    """以地点为中心生成一个经纬度框，并裁剪到模式域内。
+
+    用途：用户说“**厦门沿海的海浪场**”“闽北沿海的风暴潮分布”这类请求——
+    区域不是预定义好的，就以该地点为中心、东南西北各取 half_deg 度。
+    找不到地点/框太小则返回 None。
+    """
+    _n, coord = locate(region)
+    if not coord:
+        return None
+    lo, la = float(coord[0]), float(coord[1])
+    x0, x1 = max(LON_MIN, lo - half_deg), min(LON_MAX, lo + half_deg)
+    y0, y1 = max(LAT_MIN, la - half_deg), min(LAT_MAX, la + half_deg)
+    if (x1 - x0) < 0.6 or (y1 - y0) < 0.6:
+        return None
+    return (round(x0, 3), round(x1, 3), round(y0, 3), round(y1, 3))
 
 
 def region_box(region: str) -> Optional[tuple]:

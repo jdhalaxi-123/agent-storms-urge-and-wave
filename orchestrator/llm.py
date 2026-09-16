@@ -47,8 +47,13 @@ SYSTEM_PROMPT = (
 
     "【画图】当用户要求“画/看/展示”某类图时，调用 forecast_risk 工具，"
     "并通过 plot 参数**只指定用户要的那一类图**（wind=风场、surge_station=站点过程曲线、"
-    "surge_field=全场增水分布、wave=海浪波高、wind_wave=风+浪并排双联图、gif=风场动图、"
+    "surge_field=**风暴潮/增水场空间分布**、wave_field=**海浪场空间分布**、"
+    "wave=海浪波高曲线、wind_wave=风+浪并排双联图、gif=风场动图、"
     "validation=预报与实测对比图）；"
+    "【要“场”怎么填】用户说“**厦门沿海的海浪场**”“闽北沿海的增水分布”“XX沿海的波高分布图”这类话时："
+    "region 填那个地名、disaster 按灾种、plot 填 wave_field（浪）或 surge_field（潮/增水），"
+    "**不要追问“想看哪个范围”**——场不是预先定好的，系统会自动以该地点为中心、"
+    "东南西北各约 90 km 取一个框出场分布图。只有用户说的是真的泛指（“沿海”“近海”这种没有具体地名）才需要追问。"
     "用户要多种时才用 all。切忌用户只要一种却把各类图都画出来。"
     "用户没提图时不要传 plot（默认按灾种给一张核心图）。"
     "**站点问题不要传 surge_field**：问“厦门/崇武/晋江/东山东港 的风暴潮/海浪”时，"
@@ -157,17 +162,21 @@ FORECAST_TOOL = {
                 },
                 "plot": {
                     "type": "string",
-                    "enum": ["wind", "surge_station", "surge_field", "wave",
+                    "enum": ["wind", "surge_station", "surge_field", "wave_field", "wave",
                              "wind_wave", "gif", "validation", "all"],
                     "description": (
                         "需要出图时填写图类型（问什么画什么，不要多给）："
                         "wind=风场图（风速填色+风向箭头+7/10级等值线）；"
                         "surge_station=站点增水/水位过程曲线；"
-                        "surge_field=全场增水空间分布；wave=海浪波高曲线；"
+                        "surge_field=**风暴潮/增水场空间分布**（区域或某地沿海的“场”）；"
+                        "wave_field=**海浪场空间分布**（如“厦门沿海的海浪场”）；"
+                        "wave=海浪波高曲线；"
                         "wind_wave=风+浪并排双联图（业务上最常用的合成图）；"
                         "gif=风场动图（较慢，明确要“动图/动画”时才用）；"
                         "validation=预报与实测对比密度散点（仅台风个例有实测时）；"
                         "all=全部图。用户没明确要图时省略（默认按灾种给一张核心图）。"
+                        "注意：用户点名某地要“场/分布”时用 surge_field / wave_field，"
+                        "系统会自动以该地点为中心取一个框，不需要追问范围。"
                     ),
                 },
             },

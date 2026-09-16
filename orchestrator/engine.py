@@ -32,14 +32,32 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
            else geo_domain.check_region(region, slots.get("lon"), slots.get("lat")))
     if chk.get("buoy_code"):
         slots["buoy_code"] = str(region).strip().upper()
+
+    # ⭐⭐ 场所请求（"厦门沿海的海浪场""闽北沿海的增水分布"）：
+    #     场**不是预先定好的**——只要用户点了一个能识别的地点并要"场/分布"，
+    #     就以该地点为中心、东南西北各 0.8°（约 90 km）动态取一个框。
+    _plot = str(slots.get("plot", "") or "").strip().lower()
+    _field_plot = _plot in ("surge_field", "wave_field", "field", "distribution")
+    if _field_plot and not slots.get("field_query"):
+        box = geo_domain.region_box(region) or geo_domain.dynamic_box(region)
+        if box:
+            slots["field_query"] = True
+            slots["field_box"] = [float(x) for x in box]
+            slots["dynamic_box"] = geo_domain.region_box(region) is None
+            _n, _c = geo_domain.locate(region)
+            if _n and not geo_domain.region_box(region):
+                slots["region"] = str(_n)
+
     if not chk.get("ok"):
         reason = chk.get("reason", "out_of_domain")
         # ⭐ 大范围区域：若有「场数据」能力，**不再追问**，改为直接出该区域的场分布
         if reason == "need_clarify":
-            box = geo_domain.region_box(region)
+            box = (geo_domain.region_box(region)
+                   or (geo_domain.dynamic_box(region) if _field_plot else None))
             if box:
                 slots["field_query"] = True
                 slots["field_box"] = [float(x) for x in box]
+                slots["dynamic_box"] = geo_domain.region_box(region) is None
                 slots["broad_region"] = chk.get("matched") or region
                 slots["region"] = str(chk.get("matched") or region)
                 memory.append({"request": raw or slots.get("raw", ""), "slots": slots,
