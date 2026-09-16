@@ -137,6 +137,14 @@ def load_surge_field(date: str = "", use_ec: bool = False) -> Optional[Dict[str,
         pass
     if arr.ndim == 3 and arr.shape[1:] != (lat.size, lon.size) and arr.shape[:2] == (lat.size, lon.size):
         arr = np.transpose(arr, (2, 0, 1))
+
+    # 同样没有自带陆地掩膜：陆地格点置 NaN（否则"区域峰值"可能落在陆地）
+    try:
+        from . import landmask
+        arr = landmask.apply_land_nan(arr, lon, lat, key="surge_025")
+    except Exception as e:  # noqa: BLE001
+        print(f"[ai_daily] 0.25°场陆地掩膜失败（按原值使用）: {e}")
+
     return {
         "lat": lat, "lon": lon, "surge_cm": arr,
         "n_times": int(arr.shape[0]) if arr.ndim == 3 else 1,
@@ -162,15 +170,18 @@ def field_stats(field: Dict[str, Any], box: Optional[tuple] = None) -> Dict[str,
     if not m.any():
         return {}
     sub = arr[:, m]                        # (time, ncell)
-    mx = np.nanmax(sub, axis=0)            # 每格点过程最大
-    if not np.isfinite(mx).any():
-        return {}
-    k = int(np.nanargmax(mx))
-    jj, ii = np.where(m)
-    peak_lon = float(LON[jj[k], ii[k]])
-    peak_lat = float(LAT[jj[k], ii[k]])
-    # 峰值时刻
-    peak_t = int(np.nanargmax(np.nanmax(sub, axis=1)))
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # 陆地掩膜会造出全 NaN 切片
+        mx = np.nanmax(sub, axis=0)        # 每格点过程最大
+        if not np.isfinite(mx).any():
+            return {}
+        k = int(np.nanargmax(mx))
+        jj, ii = np.where(m)
+        peak_lon = float(LON[jj[k], ii[k]])
+        peak_lat = float(LAT[jj[k], ii[k]])
+        # 峰值时刻
+        peak_t = int(np.nanargmax(np.nanmax(sub, axis=1)))
     peak_dt = None
     if field.get("start_dt"):
         peak_dt = field["start_dt"] + datetime.timedelta(hours=peak_t)
@@ -791,10 +802,18 @@ def load_fine_surge_field(date: str = "", force: bool = False) -> Optional[Dict[
         print(f"[ai_daily] 读精细增水场失败: {e}")
         return None
 
+    # ⭐ 这个场**没有自带陆地掩膜**，陆地上也有非零数值（曾导致"区域峰值"落在泉州内陆）。
+    #    这里用 Natural Earth 海岸线生成掩膜，把陆地格点置 NaN。
+    try:
+        from . import landmask
+        surge = landmask.apply_land_nan(surge, lon, lat, key="fine_surge")
+    except Exception as e:  # noqa: BLE001
+        print(f"[ai_daily] 精细场陆地掩膜失败（按原值使用）: {e}")
+
     info = {"lat": lat, "lon": lon, "surge_cm": surge, "n_times": int(surge.shape[0]),
             "date": d, "start_dt": base, "file": f"surge_predicted_{d}.nc",
             "size_mb": round(sz / 1e6, 1), "path": remote, "local": lp,
-            "fine": True, "res": 0.01,
+            "fine": True, "res": 0.01, "land_masked": True,
             "source": f"课题三 每日人工智能预报·精细网格(0.01°) 起报 {d}"}
     _mem[key] = {"t": now, "v": info}
     return info

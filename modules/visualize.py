@@ -91,8 +91,16 @@ def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
     arr = fld["hs_m"] if is_wave else fld["surge_cm"]
     if arr.ndim == 2:
         arr = arr[None, ...]
-    mx = np.nanmax(arr, axis=0)
-    LON, LAT = np.meshgrid(lon, lat)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # 陆地掩膜会造出全 NaN 切片
+        mx = np.nanmax(arr, axis=0) if arr.ndim == 3 else arr
+        LON, LAT = np.meshgrid(lon, lat)
+        if box:
+            m = (LON >= box[0]) & (LON <= box[1]) & (LAT >= box[2]) & (LAT <= box[3])
+            mx_show = np.where(m, mx, np.nan)
+        else:
+            mx_show = mx
 
     region = ctx.request.get("region", "")
     unit = "m" if is_wave else "cm"
@@ -101,10 +109,6 @@ def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
     extent = [float(lon.min()), float(lon.max()), float(lat.min()), float(lat.max())]
     if box:
         extent = [box[0], box[1], box[2], box[3]]
-        m = (LON >= box[0]) & (LON <= box[1]) & (LAT >= box[2]) & (LAT <= box[3])
-        mx_show = np.where(m, mx, np.nan)
-    else:
-        mx_show = mx
 
     finite = mx_show[np.isfinite(mx_show)]
     if not finite.size:
@@ -130,13 +134,17 @@ def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
         plo, pla = st["peak_lon"], st["peak_lat"]
         pk = st.get("max_m") if is_wave else st.get("max_cm")
         ax.plot([plo], [pla], marker="*", markersize=17, color="#d6001c",
-                markeredgecolor="white", markeredgewidth=1.0, zorder=6)
+                markeredgecolor="white", markeredgewidth=1.0, zorder=8)
+        # 标注框始终朝图内放：峰值在下半部→标注放上面，反之放下面；左右同理
+        mid_lon = (extent[0] + extent[1]) / 2
+        mid_lat = (extent[2] + extent[3]) / 2
         dx = (extent[1] - extent[0]) * 0.32
-        dy = (extent[3] - extent[2]) * 0.13
-        tx, ty = (plo - dx, pla - dy) if plo > (extent[0] + extent[1]) / 2 else (plo + dx * 0.2, pla + dy)
+        dy = (extent[3] - extent[2]) * 0.16
+        tx = plo - dx if plo > mid_lon else plo + dx * 0.25
+        ty = pla + dy if pla < mid_lat else pla - dy
         ax.annotate(f"区域峰值 {pk} {unit}\n({plo}°E, {pla}°N)",
                     xy=(plo, pla), xytext=(tx, ty), fontsize=9, color="#d6001c",
-                    ha="center", va="center", zorder=7,
+                    ha="center", va="center", zorder=9,
                     bbox=dict(fc="white", alpha=0.85, ec="#d6001c", lw=0.8, pad=2.5),
                     arrowprops=dict(arrowstyle="->", color="#d6001c", lw=1.0))
 
