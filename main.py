@@ -185,16 +185,17 @@ with gr.Blocks(
     #chatbot .message { font-size: 17px !important; line-height: 1.7 !important; max-width: 100% !important; }
     #chatbot .bot, #chatbot .message-row { max-width: 100% !important; }
 
-    /* ===== 消息排版：气泡要有合理宽度，不许每行只放几个字 ===== */
+    /* ===== 消息排版：气泡宽度跟着文字走，但不许被压成每行几个字 ===== */
     #chatbot .message-row {
         width: 100% !important; max-width: 100% !important;
         display: flex !important; flex-wrap: wrap !important;
     }
     #chatbot .message {
-        width: fit-content !important;
-        min-width: min(20em, 100%) !important;   /* 气泡至少约 20 个汉字宽 */
-        max-width: min(92%, 52em) !important;    /* 一行最多约 52 个汉字，再长才换行 */
-        flex: 0 1 auto !important;
+        width: fit-content !important;              /* 短句就窄，长文才变宽 */
+        min-width: 0 !important;
+        max-width: min(92%, 52em) !important;       /* 一行最多约 52 个汉字，再长才换行 */
+        /* 关键：不许被 flex 压扁（原来被压扁才会出现"每行三五个字"） */
+        flex: 0 0 auto !important;
     }
     /* 带图的消息给更宽的空间，图看得清 */
     #chatbot .message:has(img) { max-width: min(96%, 72em) !important; }
