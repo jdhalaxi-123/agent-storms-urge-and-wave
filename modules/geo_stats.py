@@ -1128,7 +1128,8 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
         series = np.asarray(arr_pt, dtype=float)
         start = fld.get("start_dt")
         lb = name or region
-        site = {"name": lb, "short": lb, "code": "PT",
+        st_code = ai_daily.SURGE_STATIONS.get(lb) or ""      # 本站给站号，便于和老师对图
+        site = {"name": lb, "short": lb, "code": st_code or "PT",
                 "lon": pt_lon, "lat": pt_lat, "start_dt": start,
                 "series_cm": [], "series_full": [],
                 "series_wave_m": [None if not np.isfinite(v) else round(float(v), 2)

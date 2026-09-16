@@ -328,9 +328,11 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
     is_wave = str(ctx.request.get("disaster", "")) == "wave"
     path = OUT_DIR / (f"wave_series_{tag}.png" if is_wave else f"surge_series_{tag}.png")
 
-    fig, ax = plt.subplots(figsize=(14.8, 4.8), dpi=150)
-    colors = ["black", "#555555", "#888888", "#aaaaaa", "#bbbbbb"]
-    line_colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"]
+    # 版式完全对齐课题三 ywh.py：
+    #   figsize=(14.8,4.8) / 蓝线 'b' linewidth=2.0 / 轴标签 fontsize=14 /
+    #   标题 f'{站号}-{起}-{止}' 加粗 / DayLocator + '%m%d %H:%M' / dpi=150
+    fig, ax = plt.subplots(figsize=(14.8, 4.8))
+    first_x = last_x = None
     for si, s in enumerate(sites[:4]):
         ser = (s.get("series_full") or s.get("series_wave_m")
                or s.get("series_cm") or s.get("series") or [])
@@ -340,27 +342,29 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
         if st_dt:
             x = [st_dt + datetime.timedelta(hours=k) for k in range(len(ser))]
         else:
-            x = np.arange(len(ser))
-        lw = 1.8 if len(sites) == 1 else 1.2
-        col = colors[0] if len(sites) == 1 else line_colors[si % len(line_colors)]
-        ax.plot(x, ser, lw=lw, color=col, label=s.get("name") or "")
+            x = list(range(len(ser)))
+        col = "b" if len(sites) == 1 else ["b", "#2ca02c", "#ff7f0e", "#d62728"][si % 4]
+        ax.plot(x, ser, linewidth=2.0, color=col,
+                label=("Sig. Wave Height" if is_wave else "Storm Surge"))
+        if first_x is None:
+            first_x, last_x = x[0], x[-1]
         arr = np.asarray(ser, dtype=float)
         if not np.isfinite(arr).any():
             continue
         vmax = float(np.nanmax(arr))
         kmax = int(np.nanargmax(arr))
         ax.annotate(f"{vmax:.1f}", (x[kmax], vmax), textcoords="offset points",
-                    xytext=(4, 5), fontsize=10, color=col,
-                    bbox=dict(fc="white", alpha=0.75, ec=col, lw=0.6, pad=1.6))
+                    xytext=(5, 6), fontsize=12, color=col,
+                    bbox=dict(fc="white", alpha=0.8, ec=col, lw=0.7, pad=1.8))
 
-    # 四色警戒参考线（蓝/黄/橙/红；单位与曲线一致）
+    # 四色警戒参考线（我们的加分项，画细一点不抢主线）
     ths = plotstyle_wave_thresholds() if is_wave else THRESH_LINES
     for th, lab in ths:
-        th_c = {"蓝色": "#1f77b4", "黄色": "#e6c700",
+        th_c = {"蓝色": "#1f77b4", "黄色": "#e0b400",
                 "橙色": "#ff7f0e", "红色": "#d62728"}.get(lab, "#333333")
-        ax.axhline(th, ls="--", lw=0.9, color=th_c, alpha=0.8)
-        ax.text(0.002, th, f"{lab} {th}" + ("m" if is_wave else "cm"),
-                va="bottom", ha="left", fontsize=9, color=th_c, alpha=0.9,
+        ax.axhline(th, ls="--", lw=0.8, color=th_c, alpha=0.55)
+        ax.text(0.998, th, f"{lab} {th}" + ("m" if is_wave else "cm"),
+                va="bottom", ha="right", fontsize=9, color=th_c, alpha=0.85,
                 transform=ax.get_yaxis_transform())
 
     s0 = sites[0] if sites else {}
@@ -369,30 +373,41 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
     n = len(s0.get("series_full") or s0.get("series_wave_m")
             or s0.get("series_cm") or s0.get("series") or [])
     en = st + datetime.timedelta(hours=max(n - 1, 0)) if n else st
-    code = str(s0.get("code") or "")
-    code_txt = f"（{code}）" if code and code not in ("PT", "BOX") else ""
-    qt = "有效波高" if is_wave else "风暴增水"
-    title = f"{sname}{code_txt} {qt}过程　{st.strftime('%Y%m%d')} ~ {en.strftime('%Y%m%d')}"
-    ax.set_title(title, fontsize=15, pad=10)
-    ax.set_xlabel("Time", fontsize=12)
-    ax.set_ylabel(f"{'Sig. wave height' if is_wave else 'Storm surge'} (cm)" if not is_wave
-                  else "有效波高 (m)", fontsize=12)
-    ax.tick_params(labelsize=11)
+    code = str(s0.get("code") or "") or str(sname)
+    if code in ("PT", "BOX", ""):
+        code = str(sname)
+    ax.set_xlabel("Time", fontsize=14)
+    ax.set_ylabel("Sig. wave height/m" if is_wave else "Storm surge/cm", fontsize=14)
+    ax.set_title(f"{code}-{st.strftime('%Y%m%d')}-{en.strftime('%Y%m%d')}",
+                 fontsize=14, fontweight="bold")
     try:
-        ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+        ax.xaxis.set_major_locator(mdates.DayLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%m%d %H:%M"))
-        fig.autofmt_xdate(rotation=0)
+        fig.autofmt_xdate()
     except Exception:
         pass
+    ax.tick_params(axis="x", labelsize=12)
+    ax.tick_params(axis="y", labelsize=12)
+    for lab in ax.get_xticklabels():
+        lab.set_rotation(0)
+        lab.set_ha("center")
+    if first_x is not None and last_x is not None and hasattr(first_x, "year"):
+        try:
+            ax.set_xlim(first_x, last_x)
+        except Exception:
+            pass
     if len(sites) > 1:
         handles, labels = ax.get_legend_handles_labels()
         if labels:
-            ax.legend(handles, labels, loc="upper left", fontsize=10, framealpha=0.85)
-    ax.grid(alpha=0.0)
-    for sp in ("top", "right"):
-        ax.spines[sp].set_visible(False)
-    fig.tight_layout(pad=0.9)
-    fig.savefig(path, bbox_inches="tight")
+            ax.legend(handles, labels, loc="upper left", fontsize=11, framealpha=0.85)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+
+    # 同时按他们的命名存一份 TIFF（XMN_20260915_20260921.tif），便于与老师对图
+    try:
+        tif = OUT_DIR / f"{code}_{st.strftime('%Y%m%d')}_{en.strftime('%Y%m%d')}.tif"
+        fig.savefig(tif, dpi=150, format="tiff", bbox_inches="tight")
+    except Exception:
+        pass
     plt.close(fig)
     return str(path)
 
