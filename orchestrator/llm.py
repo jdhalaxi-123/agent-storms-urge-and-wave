@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -21,6 +22,29 @@ SYSTEM_PROMPT = (
     "对风暴潮、海浪、海洋预报相关的常识或知识问题，直接清晰回答；"
     "当用户需要查询某个海域的具体预报风险（海水倒灌、增水、浪高、预警等级等）时，"
     "调用 forecast_risk 工具获取结果，再把结果整理成简洁易懂的回复。"
+
+    # ===================== 需求澄清（grill-me 风格）===================== #
+    "【开工前先把需求问清楚】这是本助手的核心习惯：**宁可多问一句，不要猜着给结果**。"
+    "用户提预报需求时，先过一遍这 5 个槽位："
+    "① 位置——哪个站点（厦门/崇武/晋江/东山东港）、哪个区域（福建/台湾海峡/粤东…）、还是经纬度？"
+    "② 时间——今天/明天/未来几天/某个历史台风？"
+    "③ 数据口径——看**当天的每日预报**，还是**某个历史台风个例**？"
+    "④ 关心什么——增水多大 / 总水位会不会超警戒潮位 / 浪高多少 / 会不会海水倒灌？"
+    "⑤ 要不要图——站点过程曲线 / 区域分布图 / 海浪曲线（要哪些给哪些）？"
+    "**凡是有槽位缺失、且缺了会让答案可能不是用户想要的，就不要急着调 forecast_risk**："
+    "先调用 query_options 拿到真实可选项，然后**一次性**向用户提 3~5 个带选项的问题。"
+    "追问要求："
+    "· **只问缺的**——用户已说清的不要再问，能从对话上文推断的直接沿用；"
+    "· **每个问题都给可选答案**，用户一句话甚至一个词就能答完（如“厦门”“明天”“要图”）；"
+    "· **一次问完**，不要一轮问一个地挤牙膏；"
+    "· **选项必须真实**——日期范围、台风编号、区域名一律取自 query_options 的返回，"
+    "不能凭印象编（例如不要问“要不要看 2020 年的台风”而系统里根本没有）；"
+    "· 结尾加一句：“也可以直接说‘你看着给’，我就按常用默认值出结果”。"
+    "用户回答后：**把前后几轮的信息合并**成完整槽位再调 forecast_risk，不要重复确认已答过的内容。"
+    "若用户明确说“别问了/直接给/你看着给”，就按默认值（区域=厦门、时间=最近一次每日预报、"
+    "灾种=风暴潮）直接执行，不再追问。"
+    "若用户说“先问我几个问题/帮我把需求问清楚”，即使信息看起来够，也先按上面 5 个槽位问一轮。"
+
     "【画图】当用户要求“画/看/展示”某类图时，调用 forecast_risk 工具，"
     "并通过 plot 参数**只指定用户要的那一类图**（wind=风场、surge_station=站点过程曲线、"
     "surge_field=全场增水分布、wave=海浪波高）；"
@@ -54,6 +78,9 @@ SYSTEM_PROMPT = (
     "不要只当成一个点来说。只有当系统明确返回“范围较大，请具体说明位置”时才转达追问。"
     "【重要】生成的图片会自动附加到对话中显示，回复里不要再用 markdown 图片语法"
     "（如 ![](...)）或写出本地文件路径，只需简要说明图的内容即可。"
+    "【数字纪律】增水值、浪高、警戒潮位、时间、站点名等所有数值一律**照抄工具返回结果**，"
+    "不要改写、不要凭印象补数字（例如警戒潮位 373/393/413/433 就照抄这四位数）；"
+    "工具没给的数值就不要写。"
 )
 
 FORECAST_TOOL = {
@@ -125,6 +152,67 @@ FORECAST_TOOL = {
         },
     },
 }
+
+
+OPTIONS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "query_options",
+        "description": (
+            "查询系统**当前可选的范围**（可查的站点/区域/台风编号、最新一次每日预报的起报日与覆盖时段、"
+            "灾害类型、可出的图类型）。"
+            "**在向用户追问之前先调用它**，这样问出来的选项都是真实可用的，不会问到查不到的东西。"
+            "返回后按“需求澄清”协议向用户提 3~5 个带选项的问题。"
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
+
+
+def _call_options(args: Dict[str, Any]) -> Dict[str, Any]:
+    """返回当前数据可用范围（供 LLM 生成**准确的追问选项**）。"""
+    from orchestrator import geo_domain
+
+    out: Dict[str, Any] = {
+        "stations": list(geo_domain.SESSION_STATION_COORD.keys()),
+        "disaster": {"storm_surge": "风暴潮（增水/总水位/倒灌风险）", "wave": "海浪（有效波高/浪高）"},
+        "plots": {"surge_station": "站点过程曲线", "surge_field": "全场增水分布",
+                  "wave": "海浪波高曲线", "wind": "风场", "all": "全部"},
+        "domain": geo_domain.DOMAIN_DESC,
+        "out_of_domain_examples": ["上海", "青岛", "大连", "深圳", "宁波", "舟山", "海口"],
+    }
+    # 可查的区域（大范围 → 会出区域分布图）
+    try:
+        out["regions_field"] = sorted(geo_domain.FIELD_CAPABLE_BROAD)
+    except Exception:
+        out["regions_field"] = ["福建", "浙江", "台湾", "台湾海峡", "粤东", "闽南", "东海"]
+    # 可查的台风个例
+    try:
+        from . import ftp_catalog as fc
+        tys = fc.typhoon_list()
+        from modules import ftp_typhoon as fty
+        out["typhoons_complete"] = list(fty.COMPLETE_TYPHOONS)
+        out["typhoons_partial"] = [t for t in tys if t not in fty.COMPLETE_TYPHOONS]
+        out["typhoons_hint"] = ("用户提到台风编号时填 typhoon 参数；"
+                                "未提台风时按“当日预报”回答")
+    except Exception:
+        out["typhoons_complete"] = ["1513", "1521", "1601", "1614", "1617",
+                                    "1709", "1808", "2305", "2311", "2403"]
+    # 当日预报的时效
+    try:
+        from modules import ai_daily as ad
+        i = ad.update_info(kind="surge")
+        w = ad.update_info(kind="wave")
+        out["daily_forecast"] = {
+            "latest_issue_date": i.get("latest_date"),
+            "storm_surge_cover": f"{i.get('latest_start')} ~ {i.get('cover_end')}",
+            "wave_cover": f"{w.get('latest_start')} ~ {w.get('cover_end')}",
+            "update_schedule": i.get("schedule"),
+            "today_ready": i.get("today_ready"),
+        }
+    except Exception:
+        pass
+    return {"ok": True, **out}
 
 
 FTP_TOOL = {
@@ -250,17 +338,59 @@ def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+TOOLS = [FORECAST_TOOL, OPTIONS_TOOL, FTP_TOOL, FTP_SYNC_TOOL]
+
+# 允许的最大工具轮数：够 query_options → forecast_risk → 出结论这条链，
+# 又不至于让异常情况下无限循环。超出后强制不带工具出最终文本。
+MAX_TOOL_ROUNDS = 3
+
+_WEEKDAY = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _system_prompt() -> str:
+    """系统提示 + 当前日期，避免模型把“今天/明天”算错。"""
+    now = datetime.now()
+    return (SYSTEM_PROMPT
+            + f"\n【当前时间】{now:%Y-%m-%d %H:%M}（{_WEEKDAY[now.weekday()]}）。"
+            "用户说“今天/明天/后天/昨天/本周”时按此换算成具体日期；"
+            "不要凭训练记忆猜现在是几号。")
+
+
+def _run_tool(tc) -> Tuple[Dict[str, Any], List[str]]:
+    """执行一个工具调用，返回 (结果, 新增图片)。"""
+    try:
+        args = json.loads(tc.function.arguments or "{}")
+    except json.JSONDecodeError:
+        args = {}
+    if not isinstance(args, dict):
+        args = {}
+
+    name = tc.function.name
+    if name == "ftp_query":
+        return _call_ftp(args), []
+    if name == "ftp_sync":
+        return _call_ftp_sync(args), []
+    if name == "query_options":
+        return _call_options(args), []
+
+    result = _call_forecast(args)
+    return result, list(result.get("images") or [])
+
+
 def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
     """一轮对话。history 为 Gradio 传入的 [[user, assistant], ...]，返回 (文本, 图片列表)。
 
     每次 API 调用带 120s 超时，避免网络阻塞导致前端挂起。
+    支持多轮工具调用（最多 MAX_TOOL_ROUNDS 轮），这样 LLM 可以：
+        先 query_options 拿真实可选项 → 追问用户（纯文本，结束）；
+        或 query_options → forecast_risk → 基于真实结果作答。
     """
     client = _get_client()
 
     if not message or not str(message).strip():
         return "（没有识别到有效内容，请重试）", []
 
-    messages: List[Dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages: List[Dict[str, Any]] = [{"role": "system", "content": _system_prompt()}]
     for user_msg, bot_msg in history:
         # 跳过空消息，避免 DeepSeek 报 "content or tool_calls must be set"
         if user_msg:
@@ -269,48 +399,52 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
             messages.append({"role": "assistant", "content": str(bot_msg)})
     messages.append({"role": "user", "content": str(message)})
 
-    # 第一次调用：LLM 决定直接回答还是调工具
-    resp = client.chat.completions.create(model=MODEL, messages=messages, tools=[FORECAST_TOOL, FTP_TOOL, FTP_SYNC_TOOL], timeout=120)
-    msg = resp.choices[0].message
-
-    # 未调工具：直接返回文本
-    if not msg.tool_calls:
-        return msg.content or "（未生成回复，请重试）", []
-
-    # 调了工具：手动构造 assistant 的 tool_calls 消息补回
-    messages.append({
-        "role": "assistant",
-        "content": msg.content or "",
-        "tool_calls": [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
-            }
-            for tc in msg.tool_calls
-        ],
-    })
-
     images: List[str] = []
-    for tc in msg.tool_calls:
-        try:
-            args = json.loads(tc.function.arguments or "{}")
-        except json.JSONDecodeError:
-            args = {}
-        # 按工具名分发
-        if tc.function.name == "ftp_query":
-            result = _call_ftp(args)
-        elif tc.function.name == "ftp_sync":
-            result = _call_ftp_sync(args)
-        else:
-            result = _call_forecast(args)
-            if result.get("images"):
-                images = result["images"]
+    seen: Dict[Tuple[str, str], Tuple[Dict[str, Any], List[str]]] = {}
+    for _round in range(MAX_TOOL_ROUNDS):
+        resp = client.chat.completions.create(
+            model=MODEL, messages=messages, tools=TOOLS, timeout=120)
+        msg = resp.choices[0].message
+
+        # 未调工具：直接返回文本（追问、常识回答、预报结论都走这里）
+        if not msg.tool_calls:
+            return msg.content or "（未生成回复，请重试）", images
+
+        # 调了工具：手动构造 assistant 的 tool_calls 消息补回
         messages.append({
-            "role": "tool",
-            "tool_call_id": tc.id,
-            "content": json.dumps(result, ensure_ascii=False),
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name,
+                                 "arguments": tc.function.arguments or "{}"},
+                }
+                for tc in msg.tool_calls
+            ],
         })
 
-    resp2 = client.chat.completions.create(model=MODEL, messages=messages, timeout=120)
-    return resp2.choices[0].message.content or "（未生成回复，请重试）", images
+        for tc in msg.tool_calls:
+            key = (tc.function.name, tc.function.arguments or "{}")
+            if key in seen:
+                # 模型偶尔会把同一个调用重复发很多遍；预报/下载很贵，直接复用结果
+                result, new_images = seen[key]
+            else:
+                try:
+                    result, new_images = _run_tool(tc)
+                except Exception as exc:  # 工具异常不能让整轮对话挂掉
+                    result, new_images = {"ok": False,
+                                          "error": f"{type(exc).__name__}: {exc}"}, []
+                seen[key] = (result, new_images)
+            if new_images:
+                images = new_images
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+
+    # 轮数用尽：强制不带工具出最终文本，保证一定给用户一个回复
+    resp = client.chat.completions.create(model=MODEL, messages=messages, timeout=120)
+    return resp.choices[0].message.content or "（未生成回复，请重试）", images
