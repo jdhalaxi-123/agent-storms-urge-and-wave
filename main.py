@@ -185,22 +185,32 @@ with gr.Blocks(
     #chatbot .message { font-size: 17px !important; line-height: 1.7 !important; max-width: 100% !important; }
     #chatbot .bot, #chatbot .message-row { max-width: 100% !important; }
 
-    /* ===== 消息排版：气泡宽度跟着文字走，但不许被压成每行几个字 ===== */
+    /* ===== 气泡宽度：跟文字长度走（微信那种：字多长、泡多长）=====
+       Gradio 默认给 .message / .message > div 写死 width:100%（气泡撑满整行），
+       这里用 !important 覆盖成 fit-content，并把内部 div 的 100% 一并解掉。 */
     #chatbot .message-row {
-        width: 100% !important; max-width: 100% !important;
-        display: flex !important; flex-wrap: wrap !important;
+        width: 100% !important; max-width: 100% !important; display: flex !important;
     }
-    #chatbot .message {
-        width: fit-content !important;              /* 短句就窄，长文才变宽 */
+    #chatbot .message,
+    #chatbot .bubble,
+    #chatbot .user-row,
+    #chatbot .bot-row {
+        width: fit-content !important;
         min-width: 0 !important;
-        max-width: min(92%, 52em) !important;       /* 一行最多约 52 个汉字，再长才换行 */
-        /* 关键：不许被 flex 压扁（原来被压扁才会出现"每行三五个字"） */
-        flex: 0 0 auto !important;
+        max-width: min(74%, 46em) !important;   /* 一行最多约 46 个汉字，再长才换行 */
+        flex: 0 0 auto !important;              /* 不许被压扁，也不许被拉伸 */
+    }
+    #chatbot .message > div,
+    #chatbot .bubble > div,
+    #chatbot .message-content,
+    #chatbot .prose {
+        width: auto !important;
+        max-width: 100% !important;
     }
     /* 带图的消息给更宽的空间，图看得清 */
-    #chatbot .message:has(img) { max-width: min(96%, 72em) !important; }
-    #chatbot .message p, #chatbot .message li,
-    #chatbot .message-content p, #chatbot .message-content li {
+    #chatbot .message:has(img),
+    #chatbot .bubble:has(img) { max-width: min(96%, 72em) !important; }
+    #chatbot p, #chatbot li {
         white-space: pre-wrap !important;
         word-break: normal !important;
         overflow-wrap: break-word !important;
