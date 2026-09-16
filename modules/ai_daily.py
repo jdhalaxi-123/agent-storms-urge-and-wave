@@ -419,6 +419,41 @@ def list_point_wave_dates(code: str = "C6W10") -> List[str]:
     return sorted(out)
 
 
+def list_point_wave_stations(date: str = "") -> List[str]:
+    """列出某一期（默认最新）海浪单点的**浮标站号**。
+
+    注意：海浪单点与风暴潮单点是**两套不同的站**——
+        风暴潮单点：XMN 厦门 / CWU 崇武 / JNJ 晋江 / DSN 东山东港
+        海浪单点  ：46694A / C6W10 … 等浮标站号（无中文名、也没有经纬度表）
+    """
+    key = f"wpt:sta:{date or 'latest'}"
+    now = time.time()
+    if key in _mem and now - _mem[key]["t"] < 600:
+        return _mem[key]["v"]
+
+    codes: set = set()
+    pat = re.compile(r"ATM_point_wave_([A-Za-z0-9]+)_(\d{8})\.nc$")
+    dirs: List[str] = []
+    for e in _ls(POINT_WAVE_DIR):
+        if e["dir"] and re.fullmatch(r"\d{8}", e["name"]):
+            dirs.append(e["name"])
+    dirs.sort()
+    pick = [date] if (date and date in dirs) else dirs[-1:]
+    if pick:
+        for sub in _ls(f"{POINT_WAVE_DIR}/{pick[0]}"):
+            m = pat.match(sub["name"])
+            if m:
+                codes.add(m.group(1))
+    if not codes:      # 兼容旧布局
+        for e in _ls(POINT_WAVE_DIR):
+            m = pat.match(e["name"])
+            if m:
+                codes.add(m.group(1))
+    out = sorted(codes)
+    _mem[key] = {"t": now, "v": out}
+    return out
+
+
 def load_point_wave(code: str = "C6W10", date: str = "") -> Optional[Dict[str, Any]]:
     """读取单点 AI 波浪预报（swh, m）。date 为空取最新起报日。"""
     import xarray as xr

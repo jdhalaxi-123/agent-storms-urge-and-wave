@@ -1092,7 +1092,54 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
 
     disaster = str(ctx.request.get("disaster", "storm_surge") or "storm_surge")
 
-    # ---- 海浪：用 AI 海浪场在该地点周边裁剪统计（浮标站无经纬度对照，按点名位置取邻近海域）----
+    # ---- 海浪**浮标单点**（真正的"海浪单点"产品，站号如 C6W10 / 46694A）----
+    #   注意：海浪单点（浮标站号）与风暴潮单点（XMN/CWU/JNJ/DSN）是**两套不同的站**。
+    if disaster == "wave":
+        try:
+            codes = ai_daily.list_point_wave_stations("")
+            hit = next((c for c in codes if c.lower() in str(region).lower()), None)
+            if hit:
+                pw = ai_daily.load_point_wave(hit)
+                if pw and pw.get("series_m"):
+                    start = pw.get("start_dt")
+                    ser = [None if v is None else round(float(v), 2)
+                           for v in pw["series_m"]]
+                    site = {"name": hit, "short": hit, "code": hit,
+                            "lon": None, "lat": None, "start_dt": start,
+                            "series_cm": [], "series_full": [],
+                            "series_wave_m": ser,
+                            "data_kind": f"课题三 AI 海浪单点（浮标站 {hit}）"}
+                    geo = _finalize([site], region, "ai_point", pw.get("file", ""))
+                    geo["point_query"] = True
+                    geo["ai_daily"] = True
+                    geo["buoy_point"] = True
+                    geo["point_name"] = hit
+                    geo["data_source"] = "课题三 每日人工智能预报 · 海浪单点（浮标）"
+                    geo["field_date"] = pw.get("date", "")
+                    n = len(ser)
+                    if start and n:
+                        geo["data_start"] = start.strftime("%Y-%m-%d %H:%M")
+                        geo["data_end"] = (start + datetime.timedelta(
+                            hours=n - 1)).strftime("%Y-%m-%d %H:%M")
+                    arr = np.asarray([v for v in ser if v is not None], dtype=float)
+                    k = int(np.nanargmax(arr)) if arr.size else 0
+                    ws = {"status": "ok", "series": ser,
+                          "max_hs_m": pw.get("max_hs_m"),
+                          "peak_time": (start + datetime.timedelta(hours=k)).strftime("%m-%d %H:%M") if start else "",
+                          "station": hit, "n_stations": len(codes),
+                          "source": f"课题三 海浪单点（浮标站 {hit}）"}
+                    if pw.get("period_s"):
+                        try:
+                            ws["mwp_max"] = round(float(np.nanmax(
+                                np.asarray(pw["period_s"], dtype=float))), 2)
+                        except Exception:
+                            pass
+                    ctx.results["wave_stats"] = ws
+                    return geo
+        except Exception as e:  # noqa: BLE001
+            print(f"[geo_stats] 海浪浮标单点取数失败: {e}")
+
+    # ---- 海浪：地点没给站号时，取该点最近格点的逐时序列（模式场，不是浮标单点产品）----
     if disaster == "wave":
         from orchestrator import geo_domain as _gd
         name, coord = _gd.locate(region)
@@ -1139,6 +1186,9 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
         geo["point_query"] = True
         geo["ai_daily"] = True
         geo["point_name"] = lb
+        # 这是**模式场最近格点**，不是"海浪单点"产品（那套是浮标站号），
+        # 出图时要标注清楚，别让人以为拿到了浮标数据。
+        geo["grid_point"] = True
         geo["point_grid"] = {"lon": pt_lon, "lat": pt_lat,
                             "dist_km": round(float(np.hypot(pt_lon - lo, pt_lat - la) * 111), 1)}
         geo["data_source"] = "课题三 每日人工智能预报"

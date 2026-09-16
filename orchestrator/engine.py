@@ -26,7 +26,12 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     """槽位入口：LLM 工具调用直接给结构化参数。"""
     # 覆盖范围校验：超出范围不展示任何数据，只返回文字说明
     region = slots.get("region", "")
-    chk = geo_domain.check_region(region, slots.get("lon"), slots.get("lat"))
+    # ⭐ 海浪单点的**浮标站号**（C6W10 / 46694A …）不是地名，别当坐标解析后误判出界
+    chk = ({"ok": True, "matched": region, "buoy_code": True}
+           if geo_domain.is_buoy_code(region)
+           else geo_domain.check_region(region, slots.get("lon"), slots.get("lat")))
+    if chk.get("buoy_code"):
+        slots["buoy_code"] = str(region).strip().upper()
     if not chk.get("ok"):
         reason = chk.get("reason", "out_of_domain")
         # ⭐ 大范围区域：若有「场数据」能力，**不再追问**，改为直接出该区域的场分布

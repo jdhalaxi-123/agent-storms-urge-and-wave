@@ -330,6 +330,18 @@ FIELD_CAPABLE_BROAD = {
 }
 
 
+_BUOY_CODE_RE = re.compile(r"^(?:46\d{3}[A-Z]?|C[0-9A-Z][A-Z0-9]{3})$", re.I)
+
+
+def is_buoy_code(text: str) -> bool:
+    """是否为**海浪单点的浮标站号**（如 C6W10、46694A、C5W09）。
+
+    这类站号不是地名、也没有经纬度，覆盖范围校验必须放行，
+    否则会被当成坐标（"C6W10" → 6°E,10°N）而误判"超出范围"。
+    """
+    return bool(_BUOY_CODE_RE.match(str(text or "").strip()))
+
+
 def region_box(region: str) -> Optional[tuple]:
     """把大范围区域名映射成经纬度框；非大范围返回 None。"""
     r = str(region or "")

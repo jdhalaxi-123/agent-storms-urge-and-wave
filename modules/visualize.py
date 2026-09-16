@@ -376,10 +376,16 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
     code = str(s0.get("code") or "") or str(sname)
     if code in ("PT", "BOX", ""):
         code = str(sname)
+    is_grid_point = bool(geo.get("grid_point"))          # 模式场最近格点（非浮标单点产品）
+    buoy_point = bool(geo.get("buoy_point"))             # 真·海浪单点（浮标站号）
     ax.set_xlabel("Time", fontsize=14)
     ax.set_ylabel("Sig. wave height/m" if is_wave else "Storm surge/cm", fontsize=14)
-    ax.set_title(f"{code}-{st.strftime('%Y%m%d')}-{en.strftime('%Y%m%d')}",
-                 fontsize=14, fontweight="bold")
+    if is_grid_point:
+        ax.set_title(f"{sname}近岸(模式格点)-{st.strftime('%Y%m%d')}-{en.strftime('%Y%m%d')}",
+                     fontsize=14, fontweight="bold")
+    else:
+        ax.set_title(f"{code}-{st.strftime('%Y%m%d')}-{en.strftime('%Y%m%d')}",
+                     fontsize=14, fontweight="bold")
     try:
         ax.xaxis.set_major_locator(mdates.DayLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%m%d %H:%M"))
@@ -402,12 +408,14 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
             ax.legend(handles, labels, loc="upper left", fontsize=11, framealpha=0.85)
     fig.savefig(path, dpi=150, bbox_inches="tight")
 
-    # 同时按他们的命名存一份 TIFF（XMN_20260915_20260921.tif），便于与老师对图
-    try:
-        tif = OUT_DIR / f"{code}_{st.strftime('%Y%m%d')}_{en.strftime('%Y%m%d')}.tif"
-        fig.savefig(tif, dpi=150, format="tiff", bbox_inches="tight")
-    except Exception:
-        pass
+    # 只有**真实站点产品**才按他们的命名存 TIFF（XMN_起_止.tif）；
+    # 模式场格点的曲线不存，免得和老师的同名图混淆。
+    if not is_grid_point:
+        try:
+            tif = OUT_DIR / f"{code}_{st.strftime('%Y%m%d')}_{en.strftime('%Y%m%d')}.tif"
+            fig.savefig(tif, dpi=150, format="tiff", bbox_inches="tight")
+        except Exception:
+            pass
     plt.close(fig)
     return str(path)
 
