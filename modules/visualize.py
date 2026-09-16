@@ -129,12 +129,12 @@ def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
         plotstyle.add_sea_state(ax, LON, LAT, mx_show)
     plotstyle.add_colorbar(fig, ax, pc, label, ticks, shrink=0.85, pad=0.02)
 
-    # 区域峰值
+    # 区域峰值（用黑菱形，和查询地点的红五星区分开）
     if st.get("peak_lon") is not None:
         plo, pla = st["peak_lon"], st["peak_lat"]
         pk = st.get("max_m") if is_wave else st.get("max_cm")
-        ax.plot([plo], [pla], marker="*", markersize=17, color="#d6001c",
-                markeredgecolor="white", markeredgewidth=1.0, zorder=8)
+        ax.plot([plo], [pla], marker="D", markersize=9, color="black",
+                markeredgecolor="white", markeredgewidth=0.9, zorder=9)
         # 标注框始终朝图内放：峰值在下半部→标注放上面，反之放下面；左右同理
         mid_lon = (extent[0] + extent[1]) / 2
         mid_lat = (extent[2] + extent[3]) / 2
@@ -148,10 +148,13 @@ def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
                     bbox=dict(fc="white", alpha=0.85, ec="#d6001c", lw=0.8, pad=2.5),
                     arrowprops=dict(arrowstyle="->", color="#d6001c", lw=1.0))
 
-    # 本站位置
+    # 本站位置（若与查询地点重合则不画，留给红五星）
+    _qp = _query_place(ctx)
     for nm, (slo, sla) in (("厦门", (118.25, 24.50)), ("崇武", (119.00, 25.00)),
                            ("晋江", (118.50, 24.50)), ("东山", (117.50, 23.75))):
         if not (extent[0] <= slo <= extent[1] and extent[2] <= sla <= extent[3]):
+            continue
+        if _qp and abs(_qp[1] - slo) < 0.05 and abs(_qp[2] - sla) < 0.05:
             continue
         ax.plot([slo], [sla], marker="o", markersize=3.4, color="#0033cc",
                 markeredgecolor="white", markeredgewidth=0.5, zorder=6)
@@ -170,27 +173,59 @@ def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
             color="#333333", zorder=8,
             bbox=dict(fc="white", alpha=0.75, ec="#cccccc"))
 
+    # ⭐ 用户问的那个地点：红五星 + 名称
+    _mark_query_place(ax, ctx, extent=extent)
+
     rgn_tag = "".join(ch for ch in str(region) if ch.isalnum() or ch in "东南西北海峡")[:10] or "区域"
     out = OUT_DIR / f"field_ai_{('wave' if is_wave else 'surge')}_{rgn_tag}_{tag}.png"
     return plotstyle.save(fig, out, dpi=150)
 
 
-def _mark_point(ax, ctx: ModuleContext):
-    """在空间分布图上标注用户查询的目标点。"""
+def _query_place(ctx) -> tuple:
+    """用户问的那个地点 → (名称, 经度, 纬度)，用于在图上打红五星。
 
+    优先级：显式经纬度 > 地名（厦门、平潭、闽北沿海…）。
+    """
     pt = ctx.request.get("point")
-    if not (isinstance(pt, (list, tuple)) and len(pt) >= 2):
+    if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+        try:
+            return (str(ctx.request.get("point_name") or ""),
+                    float(pt[0]), float(pt[1]))
+        except (TypeError, ValueError):
+            pass
+    try:
+        from orchestrator import geo_domain
+        name, coord = geo_domain.locate(str(ctx.request.get("region", "") or ""))
+        if name and coord:
+            return (str(name), float(coord[0]), float(coord[1]))
+    except Exception:
+        pass
+    return ()
+
+
+def _mark_query_place(ax, ctx, extent=None, zorder: int = 12) -> None:
+    """把用户查询的地点用**红五星**标在图上（区域场图/风场图都用）。"""
+    qp = _query_place(ctx)
+    if not qp:
+        return
+    qn, qlo, qla = qp
+    if extent and not (extent[0] <= qlo <= extent[1] and extent[2] <= qla <= extent[3]):
         return
     try:
-        lo, la = float(pt[0]), float(pt[1])
-    except (TypeError, ValueError):
-        return
-    name = str(ctx.request.get("point_name", "") or "")
-    ax.plot([lo], [la], marker="*", markersize=13, color="#d6001c",
-            markeredgecolor="white", markeredgewidth=0.8, zorder=6)
-    ax.annotate(f" {name}({lo:.2f}°E,{la:.2f}°N)" if name else f" ({lo:.2f}°E,{la:.2f}°N)",
-                (lo, la), textcoords="offset points", xytext=(7, 4),
-                fontsize=8, color="#d6001c", zorder=6)
+        ax.plot([qlo], [qla], marker="*", markersize=26, color="#e60000",
+                markeredgecolor="white", markeredgewidth=1.3, zorder=zorder,
+                label=f"{qn}（查询点）")
+        ax.annotate(f"★ {qn}" if qn else f"★ ({qlo:.2f}°E, {qla:.2f}°N)",
+                    xy=(qlo, qla), xytext=(9, -14), textcoords="offset points",
+                    fontsize=12, fontweight="bold", color="#e60000", zorder=zorder + 1,
+                    bbox=dict(fc="white", alpha=0.88, ec="#e60000", lw=0.9, pad=2.2))
+    except Exception:
+        pass
+
+
+def _mark_point(ax, ctx: ModuleContext):
+    """在空间分布图上标注用户查询的目标点（兼容旧调用）。"""
+    _mark_query_place(ax, ctx, extent=None)
 
 
 

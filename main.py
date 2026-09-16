@@ -70,8 +70,9 @@ def _respond(text, audio_path, history):
         return _to_messages(history), "", None, history
 
     # ① 立即回显：用户消息 + 「思考中」占位（给即时反馈）
+    #    输入框只在这一步清空——用户等待期间打的字不能被后面的 yield 抹掉
     interim_history = history + [[text, (THINKING, [])]]
-    yield _to_messages(interim_history), "", None, interim_history
+    yield _to_messages(interim_history), gr.update(value=""), None, interim_history
 
     # ② 真实处理（可能较慢：LLM 两次调用 + 编排引擎）
     try:
@@ -80,12 +81,14 @@ def _respond(text, audio_path, history):
         bot_text, images = f"（处理出错：{exc}）", []
 
     # ③ 替换占位为完整回答（并记录本轮对话）
+    #    注意：输入框用 gr.skip() —— 不覆盖用户此刻已经敲进去的内容；
+    #    否则"等待期间打的字，答案一到就没了"。
     new_history = history + [[text, (bot_text, images or [])]]
     try:
         memory.append_chat(text, bot_text, {"images": len(images or [])})
     except Exception:
         pass
-    yield _to_messages(new_history), "", None, new_history
+    yield _to_messages(new_history), gr.skip(), gr.skip(), new_history
 
 
 def _load_recent_into_chat(n: int = 10):
