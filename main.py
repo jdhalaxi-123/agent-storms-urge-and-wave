@@ -182,8 +182,29 @@ with gr.Blocks(
     .gradio-container { font-size: 17px !important; }
     /* ===== 聊天区：占满高度和宽度 ===== */
     #chatbot { height: 80vh !important; min-height: 700px !important; width: 100% !important; }
-    #chatbot .message { font-size: 17px !important; line-height: 1.7 !important; max-width: 96% !important; }
+    #chatbot .message { font-size: 17px !important; line-height: 1.7 !important; max-width: 100% !important; }
     #chatbot .bot, #chatbot .message-row { max-width: 100% !important; }
+
+    /* ===== 消息排版：不许每行只放几个字 ===== */
+    #chatbot .message-row {
+        width: 100% !important; max-width: 100% !important;
+        display: flex !important; flex-wrap: wrap !important;
+    }
+    #chatbot .message, #chatbot .message-content, #chatbot .bubble {
+        width: auto !important; min-width: 0 !important; max-width: 100% !important;
+        flex: 1 1 auto !important;
+    }
+    /* 行宽上限：一行最多约 46 个汉字，再长换行；短句保持整行不挤 */
+    #chatbot .message-content { max-width: min(100%, 46em) !important; }
+    #chatbot .message p, #chatbot .message-content p,
+    #chatbot .message li, #chatbot .message-content li,
+    #chatbot .message div, #chatbot .message-content div {
+        white-space: pre-wrap !important;
+        word-break: normal !important;
+        overflow-wrap: break-word !important;
+        line-height: 1.75 !important;
+    }
+    #chatbot table { width: auto !important; max-width: 100% !important; display: block; overflow-x: auto; }
     /* ===== 聊天中的图片：更大 + 可点击(悬停提示) ===== */
     #chatbot img {
         max-width: 92% !important;
@@ -213,6 +234,8 @@ with gr.Blocks(
         label="对话",
         elem_id="chatbot",
         elem_classes=["chatbot-area"],
+        # panel = 整行排版（类似 ChatGPT/豆包），不会出现气泡被挤成每行几个字
+        layout="panel",
     )
     history = gr.State([])
 
