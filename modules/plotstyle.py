@@ -179,10 +179,28 @@ def add_colorbar(fig, ax, mappable, label: str, ticks: Optional[Sequence[float]]
     return cb
 
 
+_seq = 0
+
+
+def unique_path(path) -> Path:
+    """给图片文件名加唯一后缀，避免浏览器按同名缓存旧图。
+
+    Gradio 是按文件路径展示图片的；如果每次生成的图文件名都一样（如
+    `field_ai_wave_厦门_20260916.png`），浏览器会一直显示缓存里的旧图，
+    用户就会以为"改了没生效"。所以每次出图都带一个时间戳+序号。
+    """
+    import datetime
+    global _seq
+    _seq = (_seq + 1) % 1000
+    p = Path(path)
+    stamp = f"{datetime.datetime.now():%H%M%S}{_seq:03d}"
+    return p.with_name(f"{p.stem}_{stamp}{p.suffix}")
+
+
 def save(fig, path, dpi: int = 150) -> str:
     setup()
     import matplotlib.pyplot as plt
-    p = Path(path)
+    p = unique_path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(p, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -206,7 +224,7 @@ def make_gif(frames: List[Any], path, duration: float = 0.4, loop: int = 0) -> O
                 imgs.append(Image.fromarray(a).convert("P", palette=Image.ADAPTIVE))
         if not imgs:
             return None
-        p = Path(path)
+        p = unique_path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         imgs[0].save(p, save_all=True, append_images=imgs[1:],
                      duration=int(duration * 1000), loop=loop, optimize=True)

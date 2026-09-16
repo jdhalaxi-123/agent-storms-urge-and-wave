@@ -467,7 +467,10 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
         handles, labels = ax.get_legend_handles_labels()
         if labels:
             ax.legend(handles, labels, loc="upper left", fontsize=11, framealpha=0.85)
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    # 文件名加唯一后缀，避免浏览器按同名缓存旧图
+    from . import plotstyle as _ps
+    png = _ps.unique_path(path)
+    fig.savefig(png, dpi=150, bbox_inches="tight")
 
     # 只有**真实站点产品**才按他们的命名存 TIFF（XMN_起_止.tif）：
     #   - 区域查询里的"区域峰值曲线"不是站点产品，不存；
@@ -481,7 +484,7 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
         except Exception:
             pass
     plt.close(fig)
-    return str(path)
+    return str(png)
 
 
 def plotstyle_wave_thresholds():
