@@ -392,6 +392,10 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": _system_prompt()}]
     for user_msg, bot_msg in history:
+        # Gradio 传进来的助手消息是 (文本, 图片列表) 元组，取文本即可，
+        # 否则 str(tuple) 会把图片路径一起塞进上下文。
+        if isinstance(bot_msg, (tuple, list)):
+            bot_msg = bot_msg[0] if bot_msg else ""
         # 跳过空消息，避免 DeepSeek 报 "content or tool_calls must be set"
         if user_msg:
             messages.append({"role": "user", "content": str(user_msg)})
