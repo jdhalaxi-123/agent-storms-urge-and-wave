@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import Any, Dict
 
 from orchestrator.contract import ModuleContext
+from orchestrator import paths
 
 from . import brief_tpl
 
-OUT_DIR = Path(__file__).resolve().parent.parent / "outputs"
+# 简报输出目录：统一落在数据根目录下（默认 <项目>\stormdata\briefs）
+OUT_DIR = paths.BRIEFS_DIR
 
 
 def run(ctx: ModuleContext) -> ModuleContext:

@@ -11,9 +11,15 @@ import os
 
 import gradio as gr
 
-from orchestrator import asr, llm, memory
+from orchestrator import asr, llm, memory, paths
 
 THINKING = "🔍 正在思考中，请稍候…"
+
+# 启动时把数据目录树建好（默认 <项目>/stormdata，可用 .env 的 DATA_ROOT 改）
+try:
+    paths.ensure_tree()
+except Exception as _e:  # 目录建不出来也不能挡住服务启动
+    print(f"[warn] 数据目录初始化失败：{_e}")
 
 
 def _file_msg(img_path: str) -> dict:

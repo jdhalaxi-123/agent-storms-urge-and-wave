@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any, Dict
 
 from orchestrator.contract import ModuleContext
+from orchestrator import paths
 
-OUT_DIR = Path(__file__).resolve().parent.parent / "outputs"
+# 图片输出目录：统一落在数据根目录下（默认 <项目>\stormdata\figures）
+OUT_DIR = paths.FIGURES_DIR
 
 THRESH_LINES = [(30, "蓝色"), (50, "黄色"), (80, "橙色"), (120, "红色")]
 WAVE_THRESH = [(2.5, "蓝色"), (4.0, "黄色"), (6.0, "橙色"), (9.0, "红色")]

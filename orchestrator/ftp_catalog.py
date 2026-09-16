@@ -30,9 +30,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import ftp_client
+from . import paths
 
-# 本地缓存目录
-CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "ftp_cache"
+# 本地缓存目录（统一由 paths 决定：默认 <项目>\stormdata\cache）
+CACHE_DIR = paths.CACHE_DIR
 
 # --------------------------------------------------------------------------- #
 # 数据源定义
@@ -284,34 +285,34 @@ def best_source(cat: Dict[str, Any], want: str) -> Optional[Dict[str, Any]]:
 # 按需下载 + 缓存
 # --------------------------------------------------------------------------- #
 def cache_path(remote: str) -> Path:
-    """把远程路径映射成**唯一**的本地缓存文件名。
+    """把远程路径映射成本地缓存路径（按类别/日期/台风号分目录）。
 
     注意：不能只用 basename —— 不同台风的文件常常同名（`output_0.nc`、`output_4.nc`），
     只取 basename 会互相覆盖，导致每次查询都重新下载上百 MB。
+    具体分目录规则见 `orchestrator/paths.py`。
     """
-    parts = [p for p in str(remote).strip("/").split("/") if p]
-    safe = "__".join(parts).replace(":", "_").replace("*", "_").replace("?", "_")
-    return CACHE_DIR / safe
+    return paths.cache_path_for(remote)
 
 
 def fetch(remote: str, force: bool = False, expected_size: int = 0, quiet: bool = True) -> Optional[str]:
     """把远程文件下到本地缓存，返回本地路径；已存在且大小一致则直接复用。"""
     if not remote:
         return None
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     local = cache_path(remote)
+    local.parent.mkdir(parents=True, exist_ok=True)
     if local.exists() and not force:
         if not expected_size or abs(local.stat().st_size - expected_size) < 1024:
             return str(local)
-    # 兼容旧版缓存（只有 basename）：命中且大小一致就改名复用，省一次下载
-    legacy = CACHE_DIR / os.path.basename(remote)
-    if legacy.exists() and legacy != local and not force:
-        if not expected_size or abs(legacy.stat().st_size - expected_size) < 1024:
-            try:
-                legacy.rename(local)
-                return str(local)
-            except Exception:
-                return str(legacy)
+    # 兼容旧版缓存（项目内 data/ftp_cache，扁平命名）：命中且大小一致就搬过来，省一次下载
+    for legacy in paths.legacy_cache_paths(remote):
+        if legacy.exists() and legacy != local and not force:
+            if not expected_size or abs(legacy.stat().st_size - expected_size) < 1024:
+                try:
+                    import shutil
+                    shutil.move(str(legacy), str(local))
+                    return str(local)
+                except Exception:
+                    return str(legacy)
     try:
         if quiet:
             import contextlib
@@ -347,10 +348,10 @@ def fetch_many(items: List[Dict[str, Any]], force: bool = False,
 
 
 def cache_info() -> Dict[str, Any]:
-    """本地缓存占用情况。"""
+    """本地缓存占用情况（递归统计分目录后的所有文件）。"""
     if not CACHE_DIR.exists():
         return {"dir": str(CACHE_DIR), "files": 0, "mb": 0.0}
-    fs = [f for f in CACHE_DIR.iterdir() if f.is_file()]
+    fs = [f for f in CACHE_DIR.rglob("*") if f.is_file()]
     return {"dir": str(CACHE_DIR), "files": len(fs),
             "mb": round(sum(f.stat().st_size for f in fs) / 1e6, 1)}
 
@@ -359,7 +360,7 @@ def clear_cache(keep_mb: float = 0) -> int:
     """清理缓存；keep_mb>0 时按最近修改时间保留不超过该体积。返回删除文件数。"""
     if not CACHE_DIR.exists():
         return 0
-    fs = sorted((f for f in CACHE_DIR.iterdir() if f.is_file()),
+    fs = sorted((f for f in CACHE_DIR.rglob("*") if f.is_file()),
                 key=lambda f: f.stat().st_mtime, reverse=True)
     kept, n = 0.0, 0
     for f in fs:

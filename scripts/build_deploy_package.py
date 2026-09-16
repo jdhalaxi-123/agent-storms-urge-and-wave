@@ -40,7 +40,7 @@ INCLUDE_TOP = [
 # 一律排除
 EXCLUDE_DIRS = {
     ".venv", "venv", "__pycache__", ".git", ".idea", ".vscode",
-    "outputs", "dist", "data", "厦门中心简报材料",
+    "outputs", "dist", "data", "stormdata", "厦门中心简报材料",
     "_archive_extract",
 }
 EXCLUDE_FILE_PATTERNS = [
