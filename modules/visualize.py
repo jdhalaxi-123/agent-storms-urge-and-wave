@@ -148,16 +148,18 @@ def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
                     bbox=dict(fc="white", alpha=0.85, ec="#d6001c", lw=0.8, pad=2.5),
                     arrowprops=dict(arrowstyle="->", color="#d6001c", lw=1.0))
 
-    # 本站位置（若与查询地点重合则不画，留给红五星）
+    # 本站位置：只画点；站名统一放到左下角的说明行（逐个标会互相压字、并被峰值框遮住）
     _qp = _query_place(ctx)
+    _vis_st = []
     for nm, (slo, sla) in (("厦门", (118.25, 24.50)), ("崇武", (119.00, 25.00)),
                            ("晋江", (118.50, 24.50)), ("东山", (117.50, 23.75))):
         if not (extent[0] <= slo <= extent[1] and extent[2] <= sla <= extent[3]):
             continue
         if _qp and abs(_qp[1] - slo) < 0.05 and abs(_qp[2] - sla) < 0.05:
             continue
-        ax.plot([slo], [sla], marker="o", markersize=3.4, color="#0033cc",
-                markeredgecolor="white", markeredgewidth=0.5, zorder=6)
+        ax.plot([slo], [sla], marker="o", markersize=4.0, color="#0033cc",
+                markeredgecolor="white", markeredgewidth=0.6, zorder=6)
+        _vis_st.append(nm)
 
     typh = str(ctx.request.get("typhoon", "") or "")
     title = f"{region} {'过程最大有效波高' if is_wave else '过程最大风暴增水'}空间分布"
@@ -169,9 +171,11 @@ def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
 
     sub_txt = (f"区域最大 {st.get('max_m') if is_wave else st.get('max_cm')} {unit}"
                f"　格点 {st.get('n_cells')} 个　时长 {fld.get('n_times')} 小时")
+    if _vis_st:
+        sub_txt += "　｜　● 本站：" + " / ".join(_vis_st)
     ax.text(0.012, 0.022, sub_txt, transform=ax.transAxes, fontsize=8.5,
-            color="#333333", zorder=8,
-            bbox=dict(fc="white", alpha=0.75, ec="#cccccc"))
+            color="#333333", zorder=10,
+            bbox=dict(fc="white", alpha=0.78, ec="#cccccc"))
 
     # ⭐ 用户问的那个地点：红五星 + 名称
     _mark_query_place(ax, ctx, extent=extent)
