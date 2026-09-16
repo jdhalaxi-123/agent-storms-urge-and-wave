@@ -47,7 +47,8 @@ SYSTEM_PROMPT = (
 
     "【画图】当用户要求“画/看/展示”某类图时，调用 forecast_risk 工具，"
     "并通过 plot 参数**只指定用户要的那一类图**（wind=风场、surge_station=站点过程曲线、"
-    "surge_field=全场增水分布、wave=海浪波高）；"
+    "surge_field=全场增水分布、wave=海浪波高、wind_wave=风+浪并排双联图、gif=风场动图、"
+    "validation=预报与实测对比图）；"
     "用户要多种时才用 all。切忌用户只要一种却把各类图都画出来。"
     "用户没提图时不要传 plot（默认按灾种给一张核心图）。"
     "【风场】问“今天的风场/风有多大/画一下风场”时传 plot=wind："
@@ -148,11 +149,16 @@ FORECAST_TOOL = {
                 },
                 "plot": {
                     "type": "string",
-                    "enum": ["wind", "surge_station", "surge_field", "wave", "all"],
+                    "enum": ["wind", "surge_station", "surge_field", "wave",
+                             "wind_wave", "gif", "validation", "all"],
                     "description": (
                         "需要出图时填写图类型（问什么画什么，不要多给）："
-                        "wind=风场图；surge_station=站点增水/水位过程曲线；"
+                        "wind=风场图（风速填色+风向箭头+7/10级等值线）；"
+                        "surge_station=站点增水/水位过程曲线；"
                         "surge_field=全场增水空间分布；wave=海浪波高曲线；"
+                        "wind_wave=风+浪并排双联图（业务上最常用的合成图）；"
+                        "gif=风场动图（较慢，明确要“动图/动画”时才用）；"
+                        "validation=预报与实测对比密度散点（仅台风个例有实测时）；"
                         "all=全部图。用户没明确要图时省略（默认按灾种给一张核心图）。"
                     ),
                 },

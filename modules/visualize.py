@@ -274,6 +274,30 @@ def run(ctx: ModuleContext) -> ModuleContext:
         if want("wind"):
             wind_imgs = _draw_wind_field(OUT_DIR, ctx, tag)
             images.extend(wind_imgs)
+
+        # ===== 风 + 浪 双联图（课题三投产 GIF 的同款排布） =====
+        if want("wind_wave"):
+            try:
+                from . import viz_extra
+                images.extend(viz_extra.draw_wind_wave_pair(OUT_DIR, ctx, tag))
+            except Exception as e:  # noqa: BLE001
+                print(f"[visualize] 风浪双联图失败: {e}")
+
+        # ===== 风 + 浪 动图（明确要"动图/animation"时才做，较慢） =====
+        if plot in ("gif", "animation", "动图", "动画"):
+            try:
+                from . import viz_extra
+                images.extend(viz_extra.draw_wind_wave_gif(OUT_DIR, ctx, tag))
+            except Exception as e:  # noqa: BLE001
+                print(f"[visualize] 动图失败: {e}")
+
+        # ===== 预报 vs 实测 密度散点（台风个例有实测时） =====
+        if want("validation"):
+            try:
+                from . import viz_extra
+                images.extend(viz_extra.draw_validation_density(OUT_DIR, ctx, tag))
+            except Exception as e:  # noqa: BLE001
+                print(f"[visualize] 实测对比图失败: {e}")
     except Exception:
         pass  # 画图失败不影响文字
 
@@ -282,76 +306,91 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
 
 def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str:
-    """站点风暴潮增水曲线（项目组风格）：扁长图幅、黑色单线、
-    站名+时间范围标题、英文日期X轴。一站点一张图"""
+    """站点增水过程曲线：对齐课题三投产图版式
+    （14.8×4.8、dpi150、时间轴 `%m%d %H:%M`、英文月日刻度），
+    并保留我们的**四色警戒参考线**（他们业务图里没有，是我们的加分项）。
+    """
     import datetime
 
-    import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
     import numpy as np
 
     geo = ctx.results.get("geo_stats", {}) or {}
     region = geo.get("region") or ctx.request.get("region") or "目标海域"
     path = OUT_DIR / f"surge_series_{tag}.png"
 
-    # 一张图: 单站点(若多站, 取重点或分别画到一张? 项目组风格是一站一图)
-    # 简单起见: 画出 sites 里每个站折线(黑灰调), 主站黑色; 若单站 => 纯黑
-    fig, ax = plt.subplots(figsize=(9.0, 2.6), dpi=110)  # 扁长
-    colors = ["black", "#666666", "#999999", "#aaaaaa", "#bbbbbb"]
-    for si, s in enumerate(sites[:5]):
+    is_wave = str(ctx.request.get("disaster", "")) == "wave"
+    fig, ax = plt.subplots(figsize=(14.8, 4.8), dpi=150)
+    colors = ["black", "#555555", "#888888", "#aaaaaa", "#bbbbbb"]
+    line_colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"]
+    for si, s in enumerate(sites[:4]):
         ser = s.get("series_full") or s.get("series_cm") or s.get("series") or []
         if not ser:
             continue
-        # 构造真实时间轴(起始 start_dt, 每小时)
         st_dt = s.get("start_dt")
         if st_dt:
             x = [st_dt + datetime.timedelta(hours=k) for k in range(len(ser))]
         else:
             x = np.arange(len(ser))
-        ax.plot(x, ser, lw=0.9, color=colors[si % len(colors)], label=s["name"])
+        lw = 1.8 if len(sites) == 1 else 1.2
+        col = colors[0] if len(sites) == 1 else line_colors[si % len(line_colors)]
+        ax.plot(x, ser, lw=lw, color=col, label=s.get("name") or "")
         arr = np.asarray(ser, dtype=float)
         if not np.isfinite(arr).any():
             continue
         vmax = float(np.nanmax(arr))
         kmax = int(np.nanargmax(arr))
-        ax.annotate(f"{vmax:.0f}cm", (x[kmax], vmax), textcoords="offset points",
-                    xytext=(4, 4), fontsize=7, color=colors[si % len(colors)])
+        ax.annotate(f"{vmax:.1f}", (x[kmax], vmax), textcoords="offset points",
+                    xytext=(4, 5), fontsize=10, color=col,
+                    bbox=dict(fc="white", alpha=0.75, ec=col, lw=0.6, pad=1.6))
 
-    # 四色警戒虚线(蓝/黄/橙/红) —— 项目组水位图顶部风格
-    warn_colors = [("blue", "#1f77b4"), ("yellow", "#d62728"), ("orange", "#ff7f0e"), ("red", "#2ca02c")]
-    for th, lab in THRESH_LINES:
-        th_c = {"蓝色": "#1f77b4", "黄色": "#d62728", "橙色": "#ff7f0e", "红色": "#d62728"}.get(lab, "#333")
-        ax.axhline(th, ls="--", lw=0.7, color=th_c, alpha=0.7)
+    # 四色警戒参考线（蓝/黄/橙/红；单位与曲线一致）
+    ths = plotstyle_wave_thresholds() if is_wave else THRESH_LINES
+    for th, lab in ths:
+        th_c = {"蓝色": "#1f77b4", "黄色": "#e6c700",
+                "橙色": "#ff7f0e", "红色": "#d62728"}.get(lab, "#333333")
+        ax.axhline(th, ls="--", lw=0.9, color=th_c, alpha=0.8)
+        ax.text(0.002, th, f"{lab} {th}" + ("m" if is_wave else "cm"),
+                va="bottom", ha="left", fontsize=9, color=th_c, alpha=0.9,
+                transform=ax.get_yaxis_transform())
 
-    # 标题: 站名(时间范围) —— 与项目组一致
     s0 = sites[0] if sites else {}
     sname = s0.get("short") or s0.get("name", region)
     st = s0.get("start_dt") or datetime.datetime.now()
     n = len(s0.get("series_full") or s0.get("series") or [])
-    en = st + datetime.timedelta(hours=n) if n else st
-    ax.set_title(f"{sname}({st.strftime('%Y%m%d')} 00:00-{en.strftime('%Y%m%d')} 23:00)", fontsize=10)
-    ax.set_xlabel("Date", fontsize=9)
-    ax.set_ylabel("Storm surge (cm)", fontsize=9)
-    ax.tick_params(labelsize=8)
-    # 若时间轴是日期对象, 用英文月日格式(Nov.09) 与项目组一致
+    en = st + datetime.timedelta(hours=max(n - 1, 0)) if n else st
+    code = s0.get("code") or ""
+    qt = "有效波高" if is_wave else "风暴增水"
+    title = f"{sname}{('（' + code + '）') if code else ''} {qt}过程"
+    title += f"　{st.strftime('%Y%m%d')} ~ {en.strftime('%Y%m%d')}"
+    ax.set_title(title, fontsize=15, pad=10)
+    ax.set_xlabel("Time", fontsize=12)
+    ax.set_ylabel(f"{'Sig. wave height' if is_wave else 'Storm surge'} (cm)" if not is_wave
+                  else "有效波高 (m)", fontsize=12)
+    ax.tick_params(labelsize=11)
     try:
-        x0 = sites[0].get("start_dt")
-        if x0:
-            import matplotlib.dates as mdates
-            ax.xaxis.set_major_formatter(mdates.DateFormatter("%b.%d"))
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
-            fig.autofmt_xdate(rotation=0)
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m%d %H:%M"))
+        fig.autofmt_xdate(rotation=0)
     except Exception:
         pass
     if len(sites) > 1:
         handles, labels = ax.get_legend_handles_labels()
-        if labels:                      # 无带标签的曲线时不画图例（否则 matplotlib 会告警）
-            ax.legend(handles, labels, loc="upper left", fontsize=7, framealpha=0.8)
-    ax.grid(False)  # 项目组风格: 无网格
-    fig.tight_layout(pad=0.8)
+        if labels:
+            ax.legend(handles, labels, loc="upper left", fontsize=10, framealpha=0.85)
+    ax.grid(alpha=0.0)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    fig.tight_layout(pad=0.9)
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     return str(path)
+
+
+def plotstyle_wave_thresholds():
+    """浪高四色阈值（蓝2.5/黄4.0/橙6.0/红9.0 m）。"""
+    return [(2.5, "蓝色"), (4.0, "黄色"), (6.0, "橙色"), (9.0, "红色")]
 
 
 def _draw_mesh_surge_map(OUT_DIR: Path, ctx: ModuleContext, path: str, tag: str) -> str:
