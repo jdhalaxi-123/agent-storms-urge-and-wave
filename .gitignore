@@ -36,6 +36,11 @@ dist/
 # ===== 数据仓（下载的数据/图/简报，见 orchestrator/paths.py） =====
 stormdata/
 
+# ===== 老师/课题三发来的原始材料（勿上传，统一放 stormdata/inbox） =====
+微信数据/
+*.tif
+*.tiff
+
 # ===== 部署/自检运行产物 =====
 环境自检报告.md
 部署日志.txt
