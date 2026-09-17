@@ -35,6 +35,7 @@ INCLUDE_TOP = [
     "scenarios",
     "scripts",
     "deploy",
+    "assets",
 ]
 
 # 一律排除
@@ -56,6 +57,8 @@ ROOT_LEVEL_COPIES = {
     "deploy/1-一键部署-Windows.bat": "1-一键部署-Windows.bat",
     "deploy/2-启动.bat": "2-启动.bat",
     "deploy/3-环境自检.bat": "3-环境自检.bat",
+    "deploy/4-设置自动下载.bat": "4-设置自动下载.bat",
+    "deploy/5-配置FTP.bat": "5-配置FTP.bat",
     "deploy/部署说明.md": "部署说明.md",
     "deploy/AI部署与使用说明.md": "AI部署与使用说明.md",
 }
