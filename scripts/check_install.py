@@ -49,6 +49,20 @@ def main() -> int:
     print(f"\n① Python\n  {OK} {sys.version.split()[0]}  ({sys.executable})")
     if sys.version_info < (3, 9):
         issues.append("Python 版本过低（建议 3.10+）")
+    # 是否在用项目自带的 .venv（部署包会创建），用系统 Python 容易缺依赖
+    venv_py = (ROOT / ".venv" / "Scripts" / "python.exe")
+    in_venv = (venv_py.exists() and Path(sys.executable).resolve() == venv_py.resolve()) \
+        or ("venv" in sys.prefix.lower())
+    if in_venv:
+        print(f"  {OK} 运行在项目虚拟环境里（.venv）")
+    else:
+        print(f"  {WARN} 当前用的是**系统 Python**，不是项目自带的 .venv")
+        if not venv_py.exists():
+            print("       → 本项目还没建 .venv。推荐用部署包里的 1-一键部署-Windows.bat 装，")
+            print("         它会自动建 .venv 并把全部依赖装进去（互不干扰）")
+        else:
+            print(f"       → 项目里已有 .venv，请改用：{venv_py}")
+        issues.append("没在项目 .venv 里运行（依赖容易缺、也可能与系统 Python 冲突）")
 
     print("\n② 运行依赖")
     for group, mods in DEPS.items():
@@ -143,14 +157,28 @@ def main() -> int:
         print(f"{WARN} 发现 {len(issues)} 个问题：")
         for i, s in enumerate(issues, 1):
             print(f"   {i}. {s}")
-        print("\n修复建议：")
-        if any("出图" in s or "依赖" in s for s in issues):
-            print("  装出图依赖：")
-            print("    .venv\\Scripts\\python.exe -m pip install cartopy shapely pyproj \\")
-            print("        -i https://pypi.tuna.tsinghua.edu.cn/simple")
+        print("\n按问题对症修复：")
+        if any("界面" in s or "数据处理" in s for s in issues):
+            print("  ▸ 缺运行依赖（gradio/openai 等）——一次性装齐：")
+            print("      <venv>\\Scripts\\python.exe -m pip install -r requirements.txt \\")
+            print("          -i https://pypi.tuna.tsinghua.edu.cn/simple")
+            print("    （没建 .venv 的话：直接跑部署包里的 1-一键部署-Windows.bat 最省事）")
+        if any("出图" in s for s in issues):
+            print("  ▸ 缺画图依赖：")
+            print("      <venv>\\Scripts\\python.exe -m pip install cartopy shapely pyproj \\")
+            print("          -i https://pypi.tuna.tsinghua.edu.cn/simple")
+        if any("venv" in s for s in issues):
+            print("  ▸ 建议改用项目虚拟环境（部署包会创建 .venv，依赖互不干扰）")
+        if any("地图" in s for s in issues):
+            print("  ▸ 地图岸线数据：可以联网自动下载（跑一次⑤的冒烟测试即可），")
+            print("    或从已装好的机器拷 assets/cartopy 整个目录（约 23 MB）")
+        if any("FTP" in s for s in issues):
+            print("  ▸ FTP：双击 5-配置FTP.bat 填一次（或手改 .env 的 FTP_ 四行）")
+        if any("Key" in s for s in issues):
+            print("  ▸ DeepSeek Key：改 .env 里 DEEPSEEK_API_KEY 一行")
         if any("文件" in s for s in issues):
-            print("  代码不是最新：用最新的 stormsurge-agent-部署包-*.zip 重新解压覆盖")
-        print("  改完后重跑本脚本确认")
+            print("  ▸ 代码不是最新：用最新的 stormsurge-agent-部署包-*.zip 重新解压覆盖")
+        print("\n  改完后重跑本脚本确认")
     print("=" * 70)
     return 0 if not issues else 1
 
