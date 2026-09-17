@@ -82,6 +82,31 @@ def convert(md_path: Path, out_path: Path, title: str = "") -> Path:
         line = lines[i]
         s = line.strip()
 
+        # ---- 图片：![说明文字](相对或绝对路径) ----
+        m = re.match(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$", s)
+        if m:
+            cap, src = m.group(1).strip(), m.group(2).strip()
+            ip = Path(src)
+            if not ip.is_absolute():
+                ip = md_path.parent / src
+            if ip.exists():
+                try:
+                    doc.add_picture(str(ip), width=Cm(15.2))
+                    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    if cap:
+                        cp = doc.add_paragraph()
+                        cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        _set_font(cp.add_run(cap), CN_BODY, 10.5)
+                        cp.paragraph_format.space_after = Pt(10)
+                except Exception as e:  # noqa: BLE001
+                    p = doc.add_paragraph()
+                    _set_font(p.add_run(f"[图片插入失败: {src} — {e}]"), CN_BODY, 10.5)
+            else:
+                p = doc.add_paragraph()
+                _set_font(p.add_run(f"[图片不存在: {src}]"), CN_BODY, 10.5)
+            i += 1
+            continue
+
         # ---- 表格 ----
         if s.startswith("|") and i + 1 < len(lines) and re.match(r"^\|[\s:\-|]+\|$", lines[i + 1].strip()):
             header = _split_row(s)
