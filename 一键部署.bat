@@ -4,6 +4,14 @@ setlocal
 cd /d "%~dp0"
 title 风暴潮与海浪智能预报助手 - 一键部署
 
+rem 清掉可能失效的系统代理（Clash/V2Ray 没开会让 pip 卡在 ProxyError）
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+set "ALL_PROXY="
+set "http_proxy="
+set "https_proxy="
+set "all_proxy="
+
 echo ============================================================
 echo   一键部署（从零到能用，全程只需要回答两个问题）
 echo     1) DeepSeek API Key

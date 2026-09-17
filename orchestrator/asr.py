@@ -34,12 +34,31 @@ def _env(name: str) -> str:
 
 
 def transcribe(audio_path: str) -> str:
-    """把音频文件转成文字，自动选择后端。"""
+    """把音频文件转成文字，自动选择后端。
+
+    顺序：腾讯云一句话识别（配了密钥就用）→ 本地 faster-whisper（离线兜底）。
+    两套依赖都是**可选**的：没装腾讯 SDK 就自动落到本地识别；
+    本地识别也没装则给出明确提示（不影响文字问答）。
+    """
     sid = _env("TENCENT_SECRET_ID")
     skey = _env("TENCENT_SECRET_KEY")
     if sid and skey:
-        return _tencent(audio_path, sid, skey)
-    return _local_whisper(audio_path)
+        try:
+            return _tencent(audio_path, sid, skey)
+        except ImportError as e:
+            # 腾讯云 SDK 没装（常见于装依赖时该包下载失败）→ 回退本地识别
+            print(f"[asr] 未安装腾讯云 SDK（{e}），改用本地识别")
+        except Exception as e:  # noqa: BLE001
+            print(f"[asr] 腾讯云识别失败（{type(e).__name__}: {e}），改用本地识别")
+    try:
+        return _local_whisper(audio_path)
+    except ImportError as e:
+        raise RuntimeError(
+            "语音识别依赖未安装（腾讯云 SDK 与 faster-whisper 都不可用）。"
+            "语音输入用不了，但文字提问不受影响。"
+            "如需语音：pip install tencentcloud-sdk-python-asr "
+            "或 pip install faster-whisper"
+        ) from e
 
 
 def _to_16k_mono_wav(audio_path: str) -> bytes:

@@ -1,4 +1,4 @@
-﻿<#
+<#
 =====================================================================
  stormsuregent 一键部署脚本（Windows）
  由「1-一键部署-Windows.bat」调用，也可以直接右键“用 PowerShell 运行”。
@@ -208,6 +208,24 @@ Step 4 "安装依赖（约 1.5 GB，首次 5~20 分钟）"
 if ($SkipInstall) {
     Warn "已指定 -SkipInstall，跳过依赖安装"
 } else {
+    # ⭐ 关键：先清掉系统里的代理变量。
+    #    不少机器设了 Clash/V2Ray 的 HTTP_PROXY，但代理没开，
+    #    pip 会一直卡在 "ProxyError: Cannot connect to proxy" 重试到失败。
+    #    装 PyPI 用国内镜像直连即可，不需要代理。
+    $proxyNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                    "http_proxy", "https_proxy", "all_proxy")
+    $hadProxy = @()
+    foreach ($n in $proxyNames) {
+        $v = [Environment]::GetEnvironmentVariable($n)
+        if ($v) { $hadProxy += "$n=$v" }
+        Set-Item -Path "Env:$n" -Value "" -ErrorAction SilentlyContinue
+    }
+    if ($hadProxy.Count -gt 0) {
+        Warn "检测到系统代理，本步骤临时忽略（避免代理没开导致 pip 卡死）："
+        foreach ($h in $hadProxy) { Say "          $h" "DarkGray" }
+        Log ("忽略的代理变量: " + ($hadProxy -join "; "))
+    }
+
     & $Py -m pip install --upgrade pip setuptools wheel --quiet --disable-pip-version-check 2>&1 |
         Tee-Object -FilePath $LogFile -Append | Out-Null
 
@@ -226,6 +244,7 @@ if ($SkipInstall) {
         & $Py -m pip install -r requirements.txt `
             --index-url $m `
             --trusted-host $host_ `
+            --proxy "" `
             --timeout 60 --retries 2 --disable-pip-version-check 2>&1 |
             Tee-Object -FilePath $LogFile -Append | ForEach-Object {
                 if ($_ -match "^\s*(Collecting|Installing|Downloading)\s+(\S+)") {

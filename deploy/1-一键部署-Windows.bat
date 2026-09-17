@@ -15,6 +15,15 @@ rem to powershell.exe makes the trailing \" an escaped quote, so
 rem PowerShell would see E:\App" - strip it here.
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
+rem Clear broken proxy settings (Clash/V2Ray not running makes pip hang
+rem with ProxyError). PyPI is reached through domestic mirrors directly.
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+set "ALL_PROXY="
+set "http_proxy="
+set "https_proxy="
+set "all_proxy="
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%DP%setup_windows.ps1" -Root "%ROOT%"
 set EC=%ERRORLEVEL%
 
