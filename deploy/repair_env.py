@@ -166,7 +166,7 @@ def check_version() -> bool:
         print("     旧代码会让「下载失败」静默通过，最后报 "
               "FileNotFoundError: ... .nc 不存在，而且看不出原因。")
         print("     → 请到 GitHub 重新下载 ZIP，解压到**新文件夹**，")
-        print("       把旧的 .env 拷过去，再双击 一键部署.bat 或 7-一键修复.bat")
+        print("       把旧的 .env 拷过去，再双击 1-一键部署.bat 或 7-一键修复.bat")
     # 其他关键修复的探针
     probes = [
         ("orchestrator/llm.py", "默认直接做", "地点+灾种直接出图（不再反问）"),

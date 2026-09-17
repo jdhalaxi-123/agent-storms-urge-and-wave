@@ -73,3 +73,8 @@ _git_installer.exe
 .vscode/*
 !.vscode/settings.json
 _cmsg.txt
+
+# ===== 内部备忘（不上传：含人名/项目/经费等内部信息）=====
+docs/工作汇报材料.md
+docs/FTP-group3数据清单.md
+docs/数据接入清单.md

@@ -9,10 +9,10 @@ stormsurge-agent 版本信息
           · visualize: 出图失败原因显示在对话里 + 打印完整堆栈
           · setup_windows.ps1: 自动绕代理、pip 参数修正、UTF-8 BOM
           · requirements: 补 cartopy / shapely / pyproj
-          · 根目录按钮: 1~7 + 一键部署.bat；自带地图岸线数据（23 MB）
+          · 根目录按钮: 1~7（1-一键部署.bat 为完整流程入口）；自带地图岸线数据（23 MB）
 
 怎么确认自己手上是哪一版：
-  1. 看根目录有没有 `7-一键修复.bat` 和 `一键部署.bat`（有 = 新版）
+  1. 看根目录有没有 `7-一键修复.bat` 和 `1-一键部署.bat`（有 = 新版；旧版两者都没有）
   2. 跑 `.venv\Scripts\python.exe deploy\repair_env.py`
      它开头会打印版本号与"代码新旧"判断
   3. 看 `orchestrator\ftp_catalog.py` 里有没有 `VERSION-MARKER: fetch-fail-fix-v1`

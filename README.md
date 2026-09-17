@@ -48,7 +48,7 @@ stormsurgeagent/
 
 ### 方式零：从 GitHub 下载 ZIP（最省事，一次搞定）
 
-在 GitHub 页面点 **Code → Download ZIP**，解压后**双击根目录的 `一键部署.bat`**：
+在 GitHub 页面点 **Code → Download ZIP**，解压后**双击根目录的 `1-一键部署.bat`**：
 
 ```
 1) 自动装 Python → 建 .venv → 装全部依赖（含 cartopy 地图库）
@@ -90,7 +90,7 @@ FTP_PASS=你的密码
 
 ### 方式一：一键部署（交付包版）
 
-交付包解压后双击 `1-一键部署-Windows.bat`：自动装 Python → 建虚拟环境 → 装依赖 →
+交付包解压后双击 `1-一键部署.bat`（等同 `deploy/1-一键部署-Windows.bat`）：自动装 Python → 建虚拟环境 → 装依赖 →
 引导填 DeepSeek API Key → 启动并自动打开浏览器。以后启动双击 `2-启动.bat`。
 
 装不上时双击 `3-环境自检.bat`，会生成一份《环境自检报告.md》，

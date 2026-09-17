@@ -139,7 +139,7 @@ def check_files() -> None:
             "orchestrator/ftp_catalog.py", "modules/visualize.py",
             "scripts/check_ftp.py", "scripts/check_install.py",
             "scripts/check_pipeline.py", "deploy/setup_windows.ps1",
-            "deploy/repair_env.py", "一键部署.bat"]
+            "deploy/repair_env.py", "1-一键部署.bat"]
     miss = [f for f in need if not (ROOT / f).exists()]
     if miss:
         for m in miss:

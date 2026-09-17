@@ -9,7 +9,7 @@
 
 产物：
     dist/stormsurge-agent-部署包-YYYYMMDD.zip
-    （解压后根目录直接就是 1-一键部署-Windows.bat，双击即用）
+    （解压后根目录直接就是 1-一键部署.bat，双击即用）
 """
 from __future__ import annotations
 
@@ -54,7 +54,8 @@ EXCLUDE_FILE_PATTERNS = [
 
 # deploy/ 里的脚本要复制到 zip 根目录，方便双击
 ROOT_LEVEL_COPIES = {
-    "deploy/1-一键部署-Windows.bat": "1-一键部署-Windows.bat",
+    # 完整流程入口（文件本来就在仓库根目录，映射到自己；否则不会被打进包）
+    "1-一键部署.bat": "1-一键部署.bat",
     "deploy/2-启动.bat": "2-启动.bat",
     "deploy/3-环境自检.bat": "3-环境自检.bat",
     "deploy/4-设置自动下载.bat": "4-设置自动下载.bat",

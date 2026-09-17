@@ -384,7 +384,7 @@ def main():
         lines.append(f"{OK} 没发现阻塞问题，可以执行 **一键部署**。")
     lines.append("")
     lines.append("**下一步：**")
-    lines.append("1. 双击 `1-一键部署-Windows.bat`（Windows）或运行 `bash deploy/setup_linux.sh`（Linux/Mac）")
+    lines.append("1. 双击 `1-一键部署.bat`（Windows）或运行 `bash deploy/setup_linux.sh`（Linux/Mac）")
     lines.append("2. 按提示填入 DeepSeek API Key（https://platform.deepseek.com 获取）")
     lines.append("3. 双击 `5-配置FTP.bat` 手动填课题组 FTP（地址/端口/账号/密码）")
     lines.append("4. 双击 `2-启动.bat`，浏览器打开 http://localhost:7860")

@@ -1,7 +1,7 @@
 ﻿#
 =====================================================================
  stormsuregent 一键部署脚本（Windows）
- 由「1-一键部署-Windows.bat」调用，也可以直接右键“用 PowerShell 运行”。
+ 由根目录「1-一键部署.bat」调用，也可以直接右键“用 PowerShell 运行”。
 
  做的事情：
    1. 找 Python（没有就自动下载安装到用户目录，不需要管理员权限）
@@ -32,7 +32,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-# 项目根目录（由 1-一键部署-Windows.bat 传入；直接运行时按脚本位置推断）
+# 项目根目录（由 1-一键部署.bat 传入；直接运行时按脚本位置推断）
 # 注意：cmd 传参时 "E:\Agent\" 里的 \" 会被当成转义引号，
 #       所以收到的值可能带尾部引号/反斜杠，这里统一清理并逐级兜底。
 $RootGiven = ""

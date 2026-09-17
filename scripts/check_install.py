@@ -58,7 +58,7 @@ def main() -> int:
     else:
         print(f"  {WARN} 当前用的是**系统 Python**，不是项目自带的 .venv")
         if not venv_py.exists():
-            print("       → 本项目还没建 .venv。推荐用部署包里的 1-一键部署-Windows.bat 装，")
+            print("       → 本项目还没建 .venv。推荐用根目录的 1-一键部署.bat 装，")
             print("         它会自动建 .venv 并把全部依赖装进去（互不干扰）")
         else:
             print(f"       → 项目里已有 .venv，请改用：{venv_py}")
@@ -162,7 +162,7 @@ def main() -> int:
             print("  ▸ 缺运行依赖（gradio/openai 等）——一次性装齐：")
             print("      <venv>\\Scripts\\python.exe -m pip install -r requirements.txt \\")
             print("          -i https://pypi.tuna.tsinghua.edu.cn/simple")
-            print("    （没建 .venv 的话：直接跑部署包里的 1-一键部署-Windows.bat 最省事）")
+            print("    （没建 .venv 的话：直接双击根目录的 1-一键部署.bat 最省事）")
         if any("出图" in s for s in issues):
             print("  ▸ 缺画图依赖：")
             print("      <venv>\\Scripts\\python.exe -m pip install cartopy shapely pyproj \\")

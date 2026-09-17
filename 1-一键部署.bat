@@ -2,7 +2,7 @@
 chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
-title 风暴潮与海浪智能预报助手 - 一键部署
+title 风暴潮与海浪智能预报助手 - 一键部署（1/7）
 
 rem 清掉可能失效的系统代理（Clash/V2Ray 没开会让 pip 卡在 ProxyError）
 set "HTTP_PROXY="

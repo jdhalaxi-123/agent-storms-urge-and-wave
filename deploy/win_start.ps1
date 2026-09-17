@@ -37,7 +37,7 @@ $Py = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $Py)) {
     Say ""
     Say "   [错误] 还没有安装运行环境（找不到 .venv）" "Red"
-    Say "          请先双击运行：  1-一键部署-Windows.bat" "Yellow"
+    Say "          请先双击运行：  1-一键部署.bat" "Yellow"
     Say ""
     exit 1
 }
