@@ -59,6 +59,7 @@ ROOT_LEVEL_COPIES = {
     "deploy/3-环境自检.bat": "3-环境自检.bat",
     "deploy/4-设置自动下载.bat": "4-设置自动下载.bat",
     "deploy/5-配置FTP.bat": "5-配置FTP.bat",
+    "deploy/6-卸载-Windows.bat": "6-卸载-Windows.bat",
     "deploy/部署说明.md": "部署说明.md",
     "deploy/AI部署与使用说明.md": "AI部署与使用说明.md",
 }
