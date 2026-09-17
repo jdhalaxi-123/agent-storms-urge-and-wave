@@ -151,4 +151,6 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
         "wind": ({"file": wind.get("file"), "date": wind.get("date"),
                   "size_mb": wind.get("size_mb")} if wind else {}),
         "meta": ctx.meta,
+        # ⭐ 出图失败的原因（供对话里如实告知用户；没有失败则为 None）
+        "plot_error": ctx.results.get("visualize_error") or None,
     }

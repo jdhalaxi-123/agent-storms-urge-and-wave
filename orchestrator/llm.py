@@ -391,6 +391,16 @@ def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
         result["reply"] = (
             f"{result.get('reply', '')}\n\n📄 正式简报 Word 已生成：{result['docx_path']}"
         )
+    # ⭐ 出图失败时把原因交给模型，让它如实告诉用户（以前只打在控制台，界面上看不出）
+    vis_err = result.get("plot_error")
+    if vis_err and not (result.get("images") or []):
+        result["plot_error"] = vis_err
+        result["reply"] = (
+            f"{result.get('reply', '')}\n\n"
+            f"⚠️ 本次绘图未成功（数据是好的，问题在绘图环节）：{vis_err}\n"
+            "请把启动窗口里的报错发给技术支持；也可运行 "
+            "`python scripts/check_pipeline.py` 定位。"
+        )
     return result
 
 

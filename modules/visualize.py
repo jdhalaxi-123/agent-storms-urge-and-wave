@@ -337,7 +337,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 from . import viz_extra
                 images.extend(viz_extra.draw_wind_wave_pair(OUT_DIR, ctx, tag))
             except Exception as e:  # noqa: BLE001
-                print(f"[visualize] 风浪双联图失败: {e}")
+                _fail(ctx, "风浪双联图", e)
 
         # ===== 风 + 浪 动图（明确要"动图/animation"时才做，较慢） =====
         if plot in ("gif", "animation", "动图", "动画"):
@@ -345,7 +345,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 from . import viz_extra
                 images.extend(viz_extra.draw_wind_wave_gif(OUT_DIR, ctx, tag))
             except Exception as e:  # noqa: BLE001
-                print(f"[visualize] 动图失败: {e}")
+                _fail(ctx, "动图", e)
 
         # ===== 课题三自己出的成品图（直接取用官方版本） =====
         if plot in ("product", "official", "官方图", "他们的图", "成品图",
@@ -355,7 +355,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 images.extend(viz_extra.attach_official_products(
                     ctx, want_anim=plot in ("anim", "官方动图")))
             except Exception as e:  # noqa: BLE001
-                print(f"[visualize] 取官方成品图失败: {e}")
+                _fail(ctx, "取官方成品图", e)
 
         # ===== 预报 vs 实测 密度散点（台风个例有实测时） =====
         if want("validation"):
@@ -363,7 +363,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 from . import viz_extra
                 images.extend(viz_extra.draw_validation_density(OUT_DIR, ctx, tag))
             except Exception as e:  # noqa: BLE001
-                print(f"[visualize] 实测对比图失败: {e}")
+                _fail(ctx, "实测对比图", e)
 
         # ===== 兜底：一张图都没出来但手上有数据 → 至少给过程曲线 =====
         # （典型场景：模型给了 plot=surge_field，但站点查询没有场数据，
@@ -378,14 +378,30 @@ def run(ctx: ModuleContext) -> ModuleContext:
                         images.append(str(p))
                         print("[visualize] 已用站点过程曲线兜底出图")
                 except Exception as e:  # noqa: BLE001
-                    print(f"[visualize] 兜底曲线失败: {e}")
+                    _fail(ctx, "兜底曲线", e)
     except Exception as e:  # noqa: BLE001
-        import traceback
-        print(f"[visualize] 出图失败（不影响文字）：{e}")
-        traceback.print_exc()
+        _fail(ctx, "出图", e)
 
-    ctx.results["visualize"] = {"images": images}
+    ctx.results["visualize"] = {"images": images,
+                                "error": ctx.results.get("visualize_error", "")}
     return ctx
+
+
+def _fail(ctx, where: str, e: Exception) -> None:
+    """记录绘图失败：控制台打完整堆栈，同时把简短原因写进 ctx 供对话里提示。
+
+    以前异常被静默吞掉，界面上只看到"没有图"，无从排查；
+    现在会写进 tool 返回的 plot_error，模型能如实告诉用户失败原因。
+    """
+    import traceback
+    print(f"[visualize] {where}失败：{type(e).__name__}: {e}")
+    traceback.print_exc()
+    try:
+        errs = ctx.results.setdefault("visualize_errors", [])
+        errs.append(f"{where}: {type(e).__name__}: {e}")
+        ctx.results["visualize_error"] = "；".join(errs[-3:])
+    except Exception:
+        pass
 
 
 def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str:
