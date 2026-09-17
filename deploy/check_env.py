@@ -228,7 +228,21 @@ def check_port(lines):
     except Exception:
         free = True
     lines.append(f"- {OK if free else WARN} 7860 "
-                 f"{'空闲，可以使用' if free else '已被占用：启动前请先关掉占用它的程序'}")
+                 f"{'空闲，可以使用' if free else '已被占用'}")
+    if not free:
+        lines.append("  - ⚠️ **重要**：如果占用它的是**旧的 agent 进程**，"
+                     "那你浏览器里看到的会是旧程序（旧代码/旧环境），"
+                     "新装的这套根本没接管页面——表现就是"
+                     "\u201c能回答但出不了图\u201d。")
+        lines.append("  - 处理：先结束所有 python.exe，再重新双击 `2-启动.bat`；"
+                     "或者换端口启动：`set STORM_PORT=7861` 后再启动")
+        # 尝试列出占用者
+        rc, out = run(["netstat", "-ano"])
+        pids = [ln.split()[-1] for ln in out.splitlines()
+                if ":7860" in ln and "LISTENING" in ln.upper()]
+        if pids:
+            lines.append(f"  - 占用进程 PID：{', '.join(sorted(set(pids)))}"
+                         f"（可用 `taskkill /PID <PID> /F` 结束）")
     lines.append("")
 
 
@@ -245,15 +259,20 @@ def check_project(lines):
     venv = ROOT / ".venv"
     lines.append(f"- {OK if venv.exists() else WARN} 虚拟环境 `.venv`"
                  f"{'已存在' if venv.exists() else '还没有（部署脚本会创建）'}")
-    data_dir = Path(os.environ.get("STORM_DATA_DIR") or (ROOT / "data"))
+    # 数据仓：本项目**不要求手工放 NC 数据**，预报数据按需从课题组 FTP 下载并缓存
+    data_dir = Path(os.environ.get("STORM_DATA_DIR") or (ROOT / "stormdata"))
     if data_dir.exists():
-        lines.append(f"- {OK} 数据目录 `{data_dir}`，共 {human(dir_size(data_dir))}")
-        ncs = list(data_dir.rglob("*.nc"))
-        lines.append(f"  - 找到 {len(ncs)} 个 .nc 数据文件")
+        files = [f for f in data_dir.rglob("*") if f.is_file()]
+        ncs = [f for f in files if f.suffix == ".nc"]
+        lines.append(f"- {OK} 数据仓 `{data_dir}`，共 {human(dir_size(data_dir))}"
+                     f"（{len(files)} 个文件，其中 {len(ncs)} 个 .nc）")
     else:
-        lines.append(f"- {WARN} 数据目录 `{data_dir}` 不存在："
-                     f"系统会自动降级为骨架演示（不会崩），但出不了真实预报图。"
-                     f"把 NC 数据拷到该目录，或设置环境变量 STORM_DATA_DIR 指向数据位置。")
+        lines.append(f"- {OK} 数据仓 `{data_dir}` 还没建（正常）："
+                     f"程序会在首次提问时自动从课题组 FTP 下载并缓存到这里，"
+                     f"**不需要手工拷 NC 数据**；只是首次提问会慢一点。")
+    lines.append("")
+    lines.append("> 说明：预报数据来自课题组 FTP，提问时按需下载；"
+                 "本地 `data/` 目录只在做离线演示时才用到。")
     lines.append("")
 
 
@@ -353,8 +372,10 @@ def main():
     if facts["net_ms"]["pypi.org"] is None and facts["net_ms"]["pypi.tuna.tsinghua.edu.cn"] is None \
             and facts["net_ms"]["mirrors.aliyun.com"] is None:
         blocking.append("连不上任何 pip 源（在线部署不可行）")
-    if not facts["has_data"]:
-        blocking.append("还没有 data 数据目录（能用，但出不了真实预报）")
+    if not facts["port_7860_free"]:
+        blocking.append("端口 7860 被占用——若占用者是**旧的 agent 进程**，"
+                        "浏览器里看到的会是旧程序（常见表现：能回答但出不了图）。"
+                        "先结束所有 python.exe 再重新启动")
     if blocking:
         lines.append("需要先解决的问题：")
         for b in blocking:
@@ -365,8 +386,10 @@ def main():
     lines.append("**下一步：**")
     lines.append("1. 双击 `1-一键部署-Windows.bat`（Windows）或运行 `bash deploy/setup_linux.sh`（Linux/Mac）")
     lines.append("2. 按提示填入 DeepSeek API Key（https://platform.deepseek.com 获取）")
-    lines.append("3. 脚本装完会自动打开浏览器 http://localhost:7860")
-    lines.append("4. 把 NC 数据拷到程序目录下的 `data/`（或设置环境变量 `STORM_DATA_DIR`）")
+    lines.append("3. 双击 `5-配置FTP.bat` 手动填课题组 FTP（地址/端口/账号/密码）")
+    lines.append("4. 双击 `2-启动.bat`，浏览器打开 http://localhost:7860")
+    lines.append("   ⚠️ 启动前请确认没有旧的 python 进程占着 7860，"
+                 "否则看到的可能是旧程序")
     lines.append("")
     lines.append("---")
     lines.append("")
