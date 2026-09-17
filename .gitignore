@@ -41,8 +41,11 @@ stormdata/
 *.tif
 *.tiff
 
-# ===== 预置地图数据（cartopy Natural Earth，24 MB，随部署包走不进 git） =====
-assets/cartopy/
+# ===== 预置地图数据（cartopy Natural Earth）=====
+# 说明：这 23 MB 岸线数据**要进 git**，这样从 GitHub 下载 ZIP 解压后，
+# 一键部署不用联网也能出图（只保留 shapefile，下载的 .zip 压缩包不入库）
+assets/cartopy/**/*.zip
+assets/cartopy/**/*.tar.gz
 
 # ===== 部署/自检运行产物 =====
 环境自检报告.md
