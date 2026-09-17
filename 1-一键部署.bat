@@ -20,14 +20,22 @@ echo ============================================================
 echo.
 echo [1/4] 安装运行环境与依赖（首次约 5~15 分钟，请勿关窗口）
 echo ------------------------------------------------------------
+rem 已经装过（.venv 在）就跳过环境安装，避免重复安装，也不依赖 PowerShell 脚本
+if exist "%~dp0.venv\Scripts\python.exe" (
+  echo [跳过] 检测到已安装的运行环境 .venv，不再重复安装。
+  echo        如需重装修复，请双击 7-一键修复.bat
+  goto :env_ready
+)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\setup_windows.ps1" -NoStart
 if errorlevel 1 (
   echo.
   echo [中止] 环境安装失败，请看上面红字提示。
   echo        常见原因：网络不通、pip 源被拦、磁盘空间不足。
+  echo        也可以先双击 7-一键修复.bat 试一次。
   pause
   exit /b 1
 )
+:env_ready
 
 echo.
 echo [2/4] 配置课题组 FTP（手动填写 .env，最稳，不会被交互坑到）

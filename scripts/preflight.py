@@ -51,35 +51,65 @@ def check_py() -> None:
           else f"  {OK} 全部通过")
 
 
+def _ps_parser() -> str:
+    """找一个能用的 PowerShell 解析器：pwsh 优先，退回 Windows PowerShell。
+
+    （之前只试 pwsh，本机没有就"跳过语法解析"，结果把真正的问题放过去了。）
+    """
+    for exe in ("pwsh", "powershell"):
+        try:
+            r = subprocess.run([exe, "-NoProfile", "-Command",
+                                "$PSVersionTable.PSVersion.Major"],
+                               capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                return exe
+        except FileNotFoundError:
+            continue
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
 def check_ps1() -> None:
     print("\n② PowerShell 脚本（BOM + 语法）")
     ps = list(walk(".ps1"))
     if not ps:
         print("  （没有 .ps1）")
         return
+    exe = _ps_parser()
+    print(f"  （解析器：{exe}）" if exe else
+          f"  {WARN} 本机既没有 pwsh 也没有 powershell，只能做结构检查")
     for p in ps:
         b = p.read_bytes()
-        has_bom = b[:3] == b"\xef\xbb\xbf"
         note = []
-        if not has_bom:
+        if b[:3] != b"\xef\xbb\xbf":
             note.append("无 UTF-8 BOM")
             problems.append(f"{p.relative_to(ROOT)} 缺 UTF-8 BOM")
-        # 用 pwsh 解析（若有）
-        try:
-            cmd = ["pwsh", "-NoProfile", "-Command",
-                   f"$e=$null;[System.Management.Automation.Language.Parser]"
-                   f"::ParseFile('{p}',[ref]$null,[ref]$e)|Out-Null;"
-                   f"if($e.Count){{$e|%{{$_.Message}};exit 1}}"]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if r.returncode != 0:
-                note.append("解析报错: " + r.stdout.strip()[:120])
-                problems.append(f"{p.relative_to(ROOT)} 语法错误")
-        except FileNotFoundError:
-            note.append("（没装 pwsh，跳过语法解析）")
-        except Exception as e:  # noqa: BLE001
-            note.append(f"解析异常 {e}")
-        print(f"  {OK if not note or '跳过' in note[0] else BAD} "
-              f"{p.relative_to(ROOT)}" + (f"  ← {'；'.join(note)}" if note else ""))
+        txt = b.decode("utf-8", errors="ignore")
+        # 结构检查：块注释必须成对
+        # （曾因 `<#` 的 `<` 被误删，导致整段文件头注释变成代码 → 一运行就报一堆"意外的标记"）
+        if "#>" in txt and "<#" not in txt:
+            note.append("有 #> 却没有 <#（块注释起始符丢了！）")
+            problems.append(f"{p.relative_to(ROOT)} 块注释起始符 <# 缺失")
+        first = next((ln.strip() for ln in txt.splitlines() if ln.strip()), "")
+        if first == "#" and "#>" in txt:
+            note.append("首行是 # 但后面出现 #>（疑似 <# 被截断）")
+            problems.append(f"{p.relative_to(ROOT)} 首行疑似损坏")
+        if exe:
+            try:
+                cmd = [exe, "-NoProfile", "-Command",
+                       f"$e=$null;[System.Management.Automation.Language.Parser]"
+                       f"::ParseFile('{p}',[ref]$null,[ref]$e)|Out-Null;"
+                       f"if($e.Count){{$e|%{{'L'+$_.Extent.StartLineNumber+': '+$_.Message}};exit 1}}"]
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+                if r.returncode != 0:
+                    msg = (r.stdout or r.stderr).strip().splitlines()[:3]
+                    note.append("解析报错: " + " / ".join(msg)[:160])
+                    problems.append(f"{p.relative_to(ROOT)} 语法错误")
+            except Exception as e:  # noqa: BLE001
+                note.append(f"解析异常 {e}")
+        print(f"  {OK if not note else BAD} {p.relative_to(ROOT)}"
+              + (f"  ← {'；'.join(note)}" if note else ""))
 
 
 def check_proxy_flag() -> None:
