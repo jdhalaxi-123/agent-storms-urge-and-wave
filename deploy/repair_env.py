@@ -142,6 +142,45 @@ def check_draw() -> bool:
         return False
 
 
+def check_version() -> bool:
+    """判断手上这份代码是新是旧（避免用户在旧目录里反复试）。"""
+    print("\n⓪ 代码版本")
+    ver = "未知"
+    vf = ROOT / "VERSION.txt"
+    if vf.exists():
+        for line in vf.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("版本号"):
+                ver = line.split(":", 1)[1].strip()
+                break
+    print(f"  版本号：{ver}")
+
+    cat = ROOT / "orchestrator" / "ftp_catalog.py"
+    fresh = False
+    if cat.exists():
+        txt = cat.read_text(encoding="utf-8", errors="ignore")
+        fresh = "VERSION-MARKER: fetch-fail-fix-v1" in txt
+    if fresh:
+        print(f"  {OK} 含下载失败修复（新代码）")
+    else:
+        print(f"  {BAD} **这是旧代码**：缺少'下载失败不再返回假路径'的修复。")
+        print("     旧代码会让「下载失败」静默通过，最后报 "
+              "FileNotFoundError: ... .nc 不存在，而且看不出原因。")
+        print("     → 请到 GitHub 重新下载 ZIP，解压到**新文件夹**，")
+        print("       把旧的 .env 拷过去，再双击 一键部署.bat 或 7-一键修复.bat")
+    # 其他关键修复的探针
+    probes = [
+        ("orchestrator/llm.py", "默认直接做", "地点+灾种直接出图（不再反问）"),
+        ("modules/visualize.py", "visualize_errors", "出图失败显示在对话里"),
+        ("requirements.txt", "cartopy", "requirements 含 cartopy"),
+        ("deploy/setup_windows.ps1", "--isolated", "部署脚本 pip 参数修正"),
+    ]
+    for rel, marker, desc in probes:
+        p = ROOT / rel
+        ok = p.exists() and marker in p.read_text(encoding="utf-8", errors="ignore")
+        print(f"  {OK if ok else WARN} {desc}")
+    return fresh
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="一键修复并自检")
     ap.add_argument("--check", action="store_true", help="只看不装")
@@ -155,6 +194,8 @@ def main() -> int:
     if not PY.exists():
         print(f"  {WARN} 没找到 .venv，将用当前解释器继续（建议先跑一键部署）")
 
+    fresh = check_version()
+
     print("\n① 代理")
     cleared = clear_proxy()
     print(f"  {OK} 已清空代理环境变量" + (f"（原值：{'; '.join(cleared)}）" if cleared else "（本来就没有）"))
@@ -166,15 +207,18 @@ def main() -> int:
     print("\n" + "=" * 70)
     print("结果")
     print("=" * 70)
+    print(f"  {OK if fresh else BAD} 代码版本")
     print(f"  {OK if ok_dep else BAD} 依赖")
     print(f"  {OK if ok_ftp else BAD} 取数（FTP）")
     print(f"  {OK if ok_draw else BAD} 出图")
-    if ok_dep and ok_ftp and ok_draw:
-        print(f"\n{OK} 三项全通过：现在双击 2-启动.bat 就能正常问答+出图了")
+    if fresh and ok_dep and ok_ftp and ok_draw:
+        print(f"\n{OK} 全部通过：现在双击 2-启动.bat 就能正常问答+出图了")
+    elif not fresh:
+        print(f"\n{BAD} 先解决代码版本问题（重新下载 ZIP），再回来看其余各项")
     else:
         print(f"\n{WARN} 还有没过的项，请把本页完整输出发给技术支持（含报错行）")
     print("=" * 70)
-    return 0 if (ok_dep and ok_ftp and ok_draw) else 1
+    return 0 if (fresh and ok_dep and ok_ftp and ok_draw) else 1
 
 
 if __name__ == "__main__":

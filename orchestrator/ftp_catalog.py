@@ -319,6 +319,7 @@ def fetch(remote: str, force: bool = False, expected_size: int = 0, quiet: bool 
     # 旧版的坑：ftp_client.download() 失败时只 print 并 return False，
     # 而这里既没检查返回值、quiet=True 又把 print 吞了 →
     # 调用方拿到一个并不存在的本地路径，读的时候才报 FileNotFoundError。
+    # VERSION-MARKER: fetch-fail-fix-v1（repair_env.py 用它判断代码新旧）
     last_msg = ""
     for attempt in (1, 2):                      # 瞬时失败重试一次
         buf = io.StringIO()
