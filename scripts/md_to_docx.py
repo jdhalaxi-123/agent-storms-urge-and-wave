@@ -107,6 +107,29 @@ def convert(md_path: Path, out_path: Path, title: str = "") -> Path:
             doc.add_paragraph()
             continue
 
+        # ---- 代码块（``` 包裹）：等宽字体、不缩进、行距紧凑 ----
+        if s.startswith("```"):
+            i += 1
+            code_lines = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i].rstrip())
+                i += 1
+            i += 1  # 跳过收尾的 ```
+            for cl in code_lines:
+                p = doc.add_paragraph()
+                pf = p.paragraph_format
+                pf.left_indent = Cm(0.7)
+                pf.first_line_indent = Cm(0)
+                pf.line_spacing = 1.0
+                pf.space_after = Pt(0)
+                run = p.add_run(cl if cl.strip() else " ")
+                run.font.name = "Consolas"
+                run.font.size = Pt(9)
+                run._element.rPr.rFonts.set(qn("w:eastAsia"), "Consolas")
+                run.font.color.rgb = RGBColor(0x1F, 0x3A, 0x5F)
+            doc.add_paragraph()
+            continue
+
         # ---- 标题 ----
         m = re.match(r"^(#{1,4})\s+(.*)$", s)
         if m:
