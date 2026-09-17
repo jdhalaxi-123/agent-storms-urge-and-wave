@@ -22,6 +22,29 @@ except Exception as _e:  # 目录建不出来也不能挡住服务启动
     print(f"[warn] 数据目录初始化失败：{_e}")
 
 
+def _check_plot_deps() -> None:
+    """检查画图依赖：缺 cartopy 会表现为"能答题、但一张图都出不来"。"""
+    missing = []
+    for mod in ("matplotlib", "cartopy", "shapely", "pyproj"):
+        try:
+            __import__(mod)
+        except Exception:  # noqa: BLE001
+            missing.append(mod)
+    if not missing:
+        return
+    print("\n" + "!" * 68)
+    print(f"⚠️  缺少画图依赖：{', '.join(missing)}")
+    print("    症状：提问能正常回答，但所有图都出不来（空间分布图/过程曲线都不会有）。")
+    print("    修复：在项目目录下执行")
+    print(r"      .venv\Scripts\python.exe -m pip install cartopy shapely pyproj ^")
+    print(r"          -i https://pypi.tuna.tsinghua.edu.cn/simple")
+    print("    装完重启本程序即可。")
+    print("!" * 68 + "\n")
+
+
+_check_plot_deps()
+
+
 def _file_msg(img_path: str) -> dict:
     """图片消息：gr.Image 组件嵌入（ComponentMessage），聊天流内显示；
     点击由注入的 LIGHTBOX JS 拦截 -> 全屏大图模态框。"""

@@ -20,6 +20,11 @@ cftime>=1.6
 
 # ---- 出图 ----
 matplotlib>=3.7
+# 地图底图与投影：**画图必需**。缺了会出现"能正常答题、但一张图都出不来"，
+# 因为所有场图/站点图都要用 cartopy 画海岸线（shapely/pyproj 由 cartopy 依赖自动带上）
+cartopy>=0.22
+shapely>=2.0
+pyproj>=3.5
 
 # ---- Word 简报导出 ----
 python-docx>=1.1

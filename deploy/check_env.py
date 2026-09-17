@@ -41,6 +41,10 @@ REQUIRED_PKGS = {
     "xarray": "xarray",
     "netCDF4": "netCDF4",
     "matplotlib": "matplotlib",
+    # 出图的底图/投影依赖，缺了会导致"能答题但画不出图"
+    "cartopy": "cartopy",
+    "shapely": "shapely",
+    "pyproj": "pyproj",
     "docx": "python-docx",
     "scipy": "scipy",
 }
