@@ -23,6 +23,8 @@
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import re
 import time
@@ -313,18 +315,42 @@ def fetch(remote: str, force: bool = False, expected_size: int = 0, quiet: bool 
                     return str(local)
                 except Exception:
                     return str(legacy)
-    try:
-        if quiet:
-            import contextlib
-            import io
-            with contextlib.redirect_stdout(io.StringIO()):
-                ftp_client.download(remote, str(local))
-        else:
-            ftp_client.download(remote, str(local))
-        return str(local)
-    except Exception as e:  # noqa: BLE001
-        print(f"[ftp_catalog] 下载失败 {remote}: {e}")
-        return None
+    # 真正下载（失败要看得见、不能返回不存在的路径）
+    # 旧版的坑：ftp_client.download() 失败时只 print 并 return False，
+    # 而这里既没检查返回值、quiet=True 又把 print 吞了 →
+    # 调用方拿到一个并不存在的本地路径，读的时候才报 FileNotFoundError。
+    last_msg = ""
+    for attempt in (1, 2):                      # 瞬时失败重试一次
+        buf = io.StringIO()
+        try:
+            if quiet:
+                with contextlib.redirect_stdout(buf):
+                    ok = ftp_client.download(remote, str(local))
+            else:
+                ok = ftp_client.download(remote, str(local))
+            last_msg = buf.getvalue().strip()
+        except Exception as e:  # noqa: BLE001
+            ok, last_msg = False, f"{type(e).__name__}: {e}"
+
+        if ok and local.exists() and local.stat().st_size > 0:
+            if expected_size and abs(local.stat().st_size - expected_size) >= 1024:
+                print(f"[ftp_catalog] 大小不符 {remote}："
+                      f"本地 {local.stat().st_size}B / 远端 {expected_size}B")
+                last_msg = "下载大小与远端不一致"
+                continue
+            return str(local)
+
+        # 失败：清掉半截文件，避免下次被当成"已缓存"
+        try:
+            if local.exists() and (not ok or local.stat().st_size == 0):
+                local.unlink()
+        except Exception:
+            pass
+        if attempt == 1:
+            time.sleep(1.5)
+
+    print(f"[ftp_catalog] 下载失败 {remote}：{last_msg or '未知原因（返回 False 且无提示）'}")
+    return None
 
 
 def fetch_many(items: List[Dict[str, Any]], force: bool = False,
