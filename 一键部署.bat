@@ -30,15 +30,31 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/4] 配置课题组 FTP（填一次，之后自动取数）
+echo [2/4] 配置课题组 FTP（手动填写 .env，最稳，不会被交互坑到）
 echo ------------------------------------------------------------
 set "PY=%~dp0.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
-"%PY%" "%~dp0deploy\setup_ftp.py"
+
+rem 准备 .env：没有就复制模板，并保证 FTP 四行存在（地址端口已写好，账号密码留空）
+"%PY%" "%~dp0deploy\prep_ftp_env.py"
+
+echo.
+echo 即将打开记事本编辑 .env —— 请把这四行填好，保存并关闭记事本：
+echo     FTP_HOST=120.42.36.229
+echo     FTP_PORT=22210
+echo     FTP_USER=你的账号
+echo     FTP_PASS=你的密码
+echo （等号后不加引号、行尾不留空格；密码以 ! 结尾时直接复制粘贴）
+echo.
+start "" notepad "%~dp0.env"
+pause
+
+echo 验证 FTP 连接……
+"%PY%" "%~dp0scripts\check_ftp.py"
 if errorlevel 1 (
   echo.
-  echo [提示] FTP 没配通，稍后可以再双击 5-配置FTP.bat 重配。
-  echo        先把程序跑起来也行，只是取不到新数据。
+  echo [提示] FTP 还没通。可以稍后再双击 5-配置FTP.bat 重填再验证；
+  echo        先把程序跑起来也行，只是暂时取不到新数据。
   pause
 )
 
