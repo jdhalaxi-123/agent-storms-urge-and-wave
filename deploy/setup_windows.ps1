@@ -226,7 +226,11 @@ if ($SkipInstall) {
         Log ("忽略的代理变量: " + ($hadProxy -join "; "))
     }
 
-    & $Py -m pip install --upgrade pip setuptools wheel --quiet --disable-pip-version-check 2>&1 |
+    # 注意：**不要**写成 `--proxy ""`。
+    # PowerShell 调用原生命令时会把空字符串参数丢掉，pip 就会把下一个参数
+    # （--timeout）当成代理地址，报 "Failed to resolve '--timeout'"。
+    # 正确做法：把代理环境变量清空（上面已清），再加 --isolated 忽略 pip 配置文件里的代理。
+    & $Py -m pip --isolated install --upgrade pip setuptools wheel --quiet --disable-pip-version-check 2>&1 |
         Tee-Object -FilePath $LogFile -Append | Out-Null
 
     $mirrors = @()
@@ -241,10 +245,9 @@ if ($SkipInstall) {
     foreach ($m in $mirrors) {
         Say "        使用源：$m"
         $host_ = ([Uri]$m).Host
-        & $Py -m pip install -r requirements.txt `
+        & $Py -m pip --isolated install -r requirements.txt `
             --index-url $m `
             --trusted-host $host_ `
-            --proxy "" `
             --timeout 60 --retries 2 --disable-pip-version-check 2>&1 |
             Tee-Object -FilePath $LogFile -Append | ForEach-Object {
                 if ($_ -match "^\s*(Collecting|Installing|Downloading)\s+(\S+)") {
