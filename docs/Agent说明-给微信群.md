@@ -182,7 +182,24 @@ ax.coastlines("10m", linewidth=0.6, zorder=7)
 
 ---
 
-## 六、怎么拿到代码 / 怎么部署
+## 六、API 与配置
+
+| 用途 | 服务 | 配置项 | 说明 |
+| --- | --- | --- | --- |
+| **对话大脑（必填）** | **DeepSeek** | `DEEPSEEK_API_KEY` | 模型 `deepseek-v4-pro`，接口 `https://api.deepseek.com`（OpenAI 兼容） |
+| 语音识别（可选） | 腾讯云 ASR | `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY` | 不填则用**本地 faster-whisper** 离线识别兜底 |
+| 数据源 | 课题组 FTP | `FTP_HOST` / `FTP_PORT` / `FTP_USER` / `FTP_PASS` | **只读**：仅列目录、看大小、下载 |
+
+**API Key 已于 2026 年 9 月 17 日更换**，当前使用的 Key 为 `sk-88bb****976b`（35 位，完整值配置在项目根目录 `.env` 文件的 `DEEPSEEK_API_KEY` 一行，出于安全考虑不在本文档中写全）。
+
+- 更换方法：编辑 `.env` 里 `DEEPSEEK_API_KEY=` 那一行 → 重启服务即可，无需改代码；
+- 密钥安全：`.env` 已被 `.gitignore` 排除，**从未进入任何一次代码提交**（已核查提交历史）；
+- 计费：按 DeepSeek 平台 token 计费，同一把 Key 的调用量合并计算；
+- 网络：调用 DeepSeek 需**直连**（不要设 `HTTP_PROXY`，否则会连不上）。
+
+---
+
+## 七、怎么拿到代码 / 怎么部署
 
 - 代码仓库（公开）：<https://github.com/jdhalaxi-123/agent-storms-urge-and-wave>
 - 一键部署包：`deploy/` 目录内有 Windows 一键部署脚本（自动装 Python 环境、依赖、填 API Key、建桌面快捷方式）
