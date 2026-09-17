@@ -1,10 +1,10 @@
 @echo off
-chcp 65001 >nul
+rem One-click deploy. ASCII-only on purpose: cmd.exe code pages vary,
+rem so every Chinese message is printed by the Python scripts instead.
 setlocal
 cd /d "%~dp0"
-title 风暴潮与海浪智能预报助手 - 一键部署（1/7）
 
-rem 清掉可能失效的系统代理（Clash/V2Ray 没开会让 pip 卡在 ProxyError）
+rem Clear broken proxies (Clash/V2Ray not running would break pip)
 set "HTTP_PROXY="
 set "HTTPS_PROXY="
 set "ALL_PROXY="
@@ -13,78 +13,62 @@ set "https_proxy="
 set "all_proxy="
 
 echo ============================================================
-echo   一键部署（从零到能用，全程只需要回答两个问题）
-echo     1) DeepSeek API Key
-echo     2) 课题组 FTP 账号密码
+echo   One-click deploy
+echo     1) install Python env + dependencies
+echo     2) fill DeepSeek API Key
+echo     3) fill FTP account
+echo     4) self-check, then start
 echo ============================================================
 echo.
-echo [1/4] 安装运行环境与依赖（首次约 5~15 分钟，请勿关窗口）
-echo ------------------------------------------------------------
-rem 已经装过（.venv 在）就跳过环境安装，避免重复安装，也不依赖 PowerShell 脚本
-if exist "%~dp0.venv\Scripts\python.exe" (
-  echo [跳过] 检测到已安装的运行环境 .venv，不再重复安装。
-  echo        如需重装修复，请双击 7-一键修复.bat
-  goto :env_ready
-)
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\setup_windows.ps1" -NoStart
-if errorlevel 1 (
-  echo.
-  echo [中止] 环境安装失败，请看上面红字提示。
-  echo        常见原因：网络不通、pip 源被拦、磁盘空间不足。
-  echo        也可以先双击 7-一键修复.bat 试一次。
-  pause
-  exit /b 1
-)
-:env_ready
 
-echo.
-echo [2/4] 配置课题组 FTP（手动填写 .env，最稳，不会被交互坑到）
-echo ------------------------------------------------------------
-set "PY=%~dp0.venv\Scripts\python.exe"
-if not exist "%PY%" set "PY=python"
+set "BOOT="
+if exist "%~dp0.venv\Scripts\python.exe" set "BOOT=%~dp0.venv\Scripts\python.exe"
+if not defined BOOT if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" set "BOOT=%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+if not defined BOOT if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" set "BOOT=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+if not defined BOOT if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "BOOT=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined BOOT if exist "C:\Python310\python.exe" set "BOOT=C:\Python310\python.exe"
+if not defined BOOT if exist "C:\Python311\python.exe" set "BOOT=C:\Python311\python.exe"
+if not defined BOOT for /f "delims=" %%P in ('where python 2^>nul') do if not defined BOOT set "BOOT=%%P"
 
-rem 准备 .env：没有就复制模板，并保证 FTP 四行存在（地址端口已写好，账号密码留空）
-"%PY%" "%~dp0deploy\prep_ftp_env.py"
+if defined BOOT goto :have_python
+echo [INFO] No Python found. Downloading Python 3.10.11 (user install, no admin needed)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $d=Join-Path $env:TEMP 'py310.exe'; foreach($u in @('https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe','https://mirrors.huaweicloud.com/python/3.10.11/python-3.10.11-amd64.exe')){ try { Invoke-WebRequest -Uri $u -OutFile $d -TimeoutSec 300; break } catch {} }; if (Test-Path $d) { Start-Process -FilePath $d -ArgumentList '/quiet','InstallAllUsers=0','PrependPath=1',('TargetDir='+(Join-Path $env:LOCALAPPDATA 'Programs\Python\Python310')) -Wait }"
+if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" set "BOOT=%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
 
+:have_python
+if not defined BOOT goto :no_python
+echo [INFO] Using Python: %BOOT%
 echo.
-echo 即将打开记事本编辑 .env —— 请把这四行填好，保存并关闭记事本：
-echo     FTP_HOST=120.42.36.229
-echo     FTP_PORT=22210
-echo     FTP_USER=你的账号
-echo     FTP_PASS=你的密码
-echo （等号后不加引号、行尾不留空格；密码以 ! 结尾时直接复制粘贴）
+"%BOOT%" "%~dp0deploy\setup_env.py"
+if errorlevel 1 goto :setup_failed
+
+"%BOOT%" "%~dp0deploy\prep_ftp_env.py"
 echo.
+echo Opening .env in notepad - fill the four FTP lines, save and close it.
 start "" notepad "%~dp0.env"
 pause
-
-echo 验证 FTP 连接……
-"%PY%" "%~dp0scripts\check_ftp.py"
-if errorlevel 1 (
-  echo.
-  echo [提示] FTP 还没通。可以稍后再双击 5-配置FTP.bat 重填再验证；
-  echo        先把程序跑起来也行，只是暂时取不到新数据。
-  pause
-)
-
+"%BOOT%" "%~dp0scripts\check_ftp.py"
 echo.
-echo [3/4] 安装体检
-echo ------------------------------------------------------------
-"%PY%" "%~dp0scripts\check_install.py"
-
+"%BOOT%" "%~dp0scripts\check_install.py"
 echo.
-echo [4/4] 启动
-echo ------------------------------------------------------------
-echo   部署完成。接下来：
-echo     · 双击 2-启动.bat 打开对话页面（浏览器访问 http://localhost:7860）
-echo     · 双击 4-设置自动下载.bat 可让数据每天自动更新
-echo.
-set /p GO=现在直接启动吗？(Y/n)：
+set /p GO=Start now? (Y/n):
 if /i "%GO%"=="n" goto :done
+start "" "%~dp0.venv\Scripts\python.exe" "%~dp0main.py"
+echo Started. Open http://localhost:7860 in your browser.
+goto :done
 
-start "" "%PY%" "%~dp0main.py"
-echo 已启动。浏览器请打开 http://localhost:7860
+:no_python
+echo [ERROR] Could not prepare Python automatically.
+echo         Install Python 3.10 manually, then run this file again.
+echo         https://www.python.org/downloads/release/python-31011/
+goto :done
+
+:setup_failed
+echo.
+echo [WARN] Setup reported problems, see the lines above.
+echo        You can also run the 7th button (repair and self-check) to retry.
 
 :done
 echo.
-echo （按任意键关闭本窗口；关闭不影响已启动的服务）
+echo Press any key to close this window.
 pause >nul

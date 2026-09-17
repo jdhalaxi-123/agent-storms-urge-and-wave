@@ -54,14 +54,14 @@ EXCLUDE_FILE_PATTERNS = [
 
 # deploy/ 里的脚本要复制到 zip 根目录，方便双击
 ROOT_LEVEL_COPIES = {
-    # 完整流程入口（文件本来就在仓库根目录，映射到自己；否则不会被打进包）
+    # 根目录的 7 个按钮（文件就在仓库根目录，映射到自己）
     "1-一键部署.bat": "1-一键部署.bat",
-    "deploy/2-启动.bat": "2-启动.bat",
-    "deploy/3-环境自检.bat": "3-环境自检.bat",
-    "deploy/4-设置自动下载.bat": "4-设置自动下载.bat",
-    "deploy/5-配置FTP.bat": "5-配置FTP.bat",
-    "deploy/6-卸载-Windows.bat": "6-卸载-Windows.bat",
-    "deploy/7-一键修复.bat": "7-一键修复.bat",
+    "2-启动.bat": "2-启动.bat",
+    "3-环境自检.bat": "3-环境自检.bat",
+    "4-设置自动下载.bat": "4-设置自动下载.bat",
+    "5-配置FTP.bat": "5-配置FTP.bat",
+    "6-卸载-Windows.bat": "6-卸载-Windows.bat",
+    "7-一键修复.bat": "7-一键修复.bat",
     "deploy/部署说明.md": "部署说明.md",
     "deploy/AI部署与使用说明.md": "AI部署与使用说明.md",
 }

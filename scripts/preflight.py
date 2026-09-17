@@ -148,19 +148,31 @@ def check_proxy_flag() -> None:
 
 
 def check_bat_ascii() -> None:
-    print("\n④ 批处理文件编码")
+    """批处理必须**纯 ASCII + CRLF**。
+
+    踩过的坑：cmd.exe 解析"括号块内的多字节中文"会从字节中间截断，
+    把半句中文当命令执行（`'??不足。' is not recognized`）；
+    LF 换行也会让 if(...) 块解析异常。所以中文一律交给 Python 打印。
+    """
+    print("\n④ 批处理文件（必须纯 ASCII + CRLF）")
     bad = []
     for p in walk(".bat"):
         b = p.read_bytes()
+        why = []
         if any(x > 127 for x in b):
-            txt = b.decode("utf-8", errors="ignore")
-            if "chcp 65001" not in txt:      # 有 chcp 65001 就没问题
-                bad.append(p.relative_to(ROOT))
+            why.append("含非 ASCII 字节（中文请交给 Python 打印）")
+        for i, ch in enumerate(b):
+            if ch == 10 and (i == 0 or b[i - 1] != 13):
+                why.append("存在单独的 LF 换行（必须 CRLF）")
+                break
+        if why:
+            bad.append((p.relative_to(ROOT), "；".join(why)))
     if bad:
-        for h in bad:
-            print(f"  {WARN} {h} 含非 ASCII 且没有 chcp 65001（cmd 会乱码）")
+        for h, why in bad:
+            print(f"  {BAD} {h} ← {why}")
+            problems.append(f"{h} 批处理编码问题：{why}")
     else:
-        print(f"  {OK} 含中文的批处理都设了 chcp 65001 或用纯 ASCII")
+        print(f"  {OK} 全部为纯 ASCII + CRLF")
 
 
 def check_files() -> None:
@@ -168,8 +180,10 @@ def check_files() -> None:
     need = ["main.py", "requirements.txt", ".env.example",
             "orchestrator/ftp_catalog.py", "modules/visualize.py",
             "scripts/check_ftp.py", "scripts/check_install.py",
-            "scripts/check_pipeline.py", "deploy/setup_windows.ps1",
-            "deploy/repair_env.py", "1-一键部署.bat"]
+            "scripts/check_pipeline.py",
+            "deploy/setup_env.py", "deploy/setup_autodownload.py",
+            "deploy/prep_ftp_env.py", "deploy/repair_env.py",
+            "1-一键部署.bat", "7-一键修复.bat"]
     miss = [f for f in need if not (ROOT / f).exists()]
     if miss:
         for m in miss:
@@ -210,7 +224,7 @@ def main() -> int:
     check_py()
     check_ps1()
     check_proxy_flag()
-    check_bat_ascii()
+    check_bat_ascii()   # 批处理必须纯 ASCII + CRLF（硬性）
     check_files()
     check_secrets()
     print("\n" + "=" * 70)

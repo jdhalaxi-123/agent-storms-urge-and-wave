@@ -1,4 +1,9 @@
 @echo off
-chcp 65001 >nul
+rem Uninstall (ASCII-only). Type YES to confirm when asked.
+setlocal
 cd /d "%~dp0"
-call "%~dp0deploy\6-卸载-Windows.bat" %*
+set "PY=%~dp0.venv\Scripts\python.exe"
+if not exist "%PY%" set "PY=python"
+"%PY%" "%~dp0scripts\uninstall.py"
+echo.
+pause >nul
