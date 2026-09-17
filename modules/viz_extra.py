@@ -287,6 +287,56 @@ def draw_wind_wave_gif(OUT_DIR: Path, ctx, tag: str, *, max_frames: int = 40,
 
 
 # --------------------------------------------------------------------------- #
+# ②' 直接取用课题三自己出的**成品图**（官方版本）
+# --------------------------------------------------------------------------- #
+def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False) -> List[str]:
+    """取课题三自己出的成品图，供对话直接展示（不必自己重画）。
+
+    - 默认：0.01° 的最大增水场图 + 该站的 0.01° 站点时序图（平滑、权威）
+    - want_anim=True：附带风+增水双面板动图或增水动图（约 18~20 MB，较慢）
+    - 0.01° 那套缺的时候回退到 0.25° 的全场场图 / 站点曲线图
+    """
+    import re as _re
+
+    try:
+        from . import ai_daily
+    except Exception:
+        return []
+
+    date = str(ctx.request.get("date", "") or "")
+    m = _re.search(r"(\d{4})-?(\d{2})-?(\d{2})", date)
+    d8 = f"{m.group(1)}{m.group(2)}{m.group(3)}" if m else ""
+
+    try:
+        from orchestrator import geo_domain
+        _n, _c = geo_domain.locate(str(ctx.request.get("region", "") or ""))
+        rev = {"厦门": "XMN", "崇武": "CWU", "晋江": "JNJ", "东山东港": "DSN"}
+        if _n in rev:
+            code = rev[_n]
+    except Exception:
+        pass
+
+    got: List[Dict[str, Any]] = []
+    for kind in ("field_max", "timeseries"):
+        p = ai_daily.fetch_product(kind, code=code, date=d8)
+        if p:
+            got.append(p)
+    if not got:
+        for kind in ("field_max_1", "curve_1"):
+            p = ai_daily.fetch_product(kind, code=code, date=d8)
+            if p:
+                got.append(p)
+    if want_anim:
+        p = (ai_daily.fetch_product("wind_surge", code=code, date=d8)
+             or ai_daily.fetch_product("anim", code=code, date=d8))
+        if p:
+            got.append(p)
+
+    ctx.results["official_products"] = got
+    return [g["path"] for g in got if g.get("path")]
+
+
+# --------------------------------------------------------------------------- #
 # ③ 预报 vs 实测 密度散点
 # --------------------------------------------------------------------------- #
 def _pairs_from_ctx(ctx) -> Tuple[np.ndarray, np.ndarray, str, str]:

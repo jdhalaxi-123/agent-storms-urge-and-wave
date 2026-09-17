@@ -166,7 +166,7 @@ FORECAST_TOOL = {
                 "plot": {
                     "type": "string",
                     "enum": ["wind", "surge_station", "surge_field", "wave_field", "wave",
-                             "wind_wave", "gif", "validation", "all"],
+                             "wind_wave", "gif", "validation", "product", "all"],
                     "description": (
                         "需要出图时填写图类型（问什么画什么，不要多给）："
                         "wind=风场图（风速填色+风向箭头+7/10级等值线）；"
@@ -177,6 +177,8 @@ FORECAST_TOOL = {
                         "wind_wave=风+浪并排双联图（业务上最常用的合成图）；"
                         "gif=风场动图（较慢，明确要“动图/动画”时才用）；"
                         "validation=预报与实测对比密度散点（仅台风个例有实测时）；"
+                        "product=**直接用课题三自己出的成品图**（官方版本：0.01° 最大增水场图 "
+                        "＋该站时序图；用户说“用他们的图/官方图/课题三的图”时填这个）；"
                         "all=全部图。用户没明确要图时省略（默认按灾种给一张核心图）。"
                         "注意：用户点名某地要“场/分布”时用 surge_field / wave_field，"
                         "系统会自动以该地点为中心取一个框，不需要追问范围。"

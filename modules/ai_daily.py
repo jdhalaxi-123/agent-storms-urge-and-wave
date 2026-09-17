@@ -829,6 +829,91 @@ def fine_field_stats(field: Dict[str, Any], box: Optional[tuple] = None) -> Dict
 
 
 # --------------------------------------------------------------------------- #
+# ⑨ 课题三自己出的**成品图**（PNG/GIF）——可直接取用，不必自己画
+#    _2 目录：基于 0.01° 旋转网格（福建中南部），平滑
+#    _1 目录：基于 0.25° 全场网格，方格明显（且台湾是白洞）
+# --------------------------------------------------------------------------- #
+PROD2 = f"{DF}/storm_surge_for_spatiotemporal_2/results_atm"
+PROD1 = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"
+STATION_CN_FULL = {"XMN": "厦门", "CWU": "崇武", "JNJ": "晋江", "DSN": "东山"}
+
+
+def _prod_newest(dirpath: str, pattern: str):
+    """目录里日期最大的匹配文件 → (日期, entry)。"""
+    pat = re.compile(pattern)
+    best = None
+    for e in _ls(dirpath):
+        if e["dir"]:
+            continue
+        m = pat.search(e["name"])
+        if not m:
+            continue
+        d = m.group(1)
+        if best is None or d > best[0]:
+            best = (d, e)
+    return best
+
+
+def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict[str, Any]]:
+    """取回课题三的成品图，返回 {path,date,kind,file,grid,size_mb}。
+
+    kind:
+        field_max   _2 最大增水场图（0.01°，福建中南部）   surge_max_YYYYMMDD.png
+        timeseries  _2 站点时序图（0.01° 网格）            surge_XMN_timeseries_YYYYMMDD.png
+        anim        _2 增水动图（约 20 MB）                surge_animation_YYYYMMDD.gif
+        field_max_1 _1 最大增水场图（0.25°，全场）         surge_max_atm_forecast_YYYYMMDD.png
+        curve_1     _1 站点曲线图（0.25° 网格）            <中文站名>_surge_curve_atm_forecast_YYYYMMDD.png
+        wind_surge  _1 风+增水双面板动图（约 18 MB）       wind_surge_double_atm_forecast_YYYYMMDD.gif
+    """
+    code = str(code or "XMN").upper()
+    cn = STATION_CN_FULL.get(code, "厦门")
+
+    if kind in ("field_max", "timeseries", "anim"):
+        pat = {"field_max": r"surge_max_(\d{8})\.png",
+               "timeseries": rf"surge_{code}_timeseries_(\d{{8}})\.png",
+               "anim": r"surge_animation_(\d{8})\.gif"}[kind]
+        b = _prod_newest(PROD2, pat)
+        if not b:
+            return None
+        d, e = b
+        lp = fc.fetch(e["path"], expected_size=e["size"])
+        if not lp:
+            return None
+        return {"path": lp, "date": d, "kind": kind, "file": e["name"],
+                "size_mb": round(e["size"] / 1e6, 2),
+                "grid": "0.01° 旋转网格（福建中南部）"}
+
+    if kind in ("field_max_1", "curve_1", "wind_surge"):
+        dirs = sorted({e["name"] for e in _ls(PROD1)
+                       if e["dir"] and re.fullmatch(r"atm_forecast_\d{8}", e["name"])})
+        if not dirs:
+            return None
+        want = f"atm_forecast_{date}" if date else ""
+        pick = want if want in dirs else dirs[-1]
+        d = pick.replace("atm_forecast_", "")
+        fname = {"field_max_1": f"surge_max_atm_forecast_{d}.png",
+                 "curve_1": f"{cn}_surge_curve_atm_forecast_{d}.png",
+                 "wind_surge": f"wind_surge_double_atm_forecast_{d}.gif"}[kind]
+        remote = f"{PROD1}/{pick}/{fname}"
+        ftp = fc.ftp_client._connect()
+        try:
+            sz = fc._stat_size(ftp, remote)
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                pass
+        if not sz:
+            return None
+        lp = fc.fetch(remote, expected_size=sz)
+        if not lp:
+            return None
+        return {"path": lp, "date": d, "kind": kind, "file": fname,
+                "size_mb": round(sz / 1e6, 2), "grid": "0.25°（全场）"}
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # 概览
 # --------------------------------------------------------------------------- #
 def overview() -> Dict[str, Any]:

@@ -347,6 +347,16 @@ def run(ctx: ModuleContext) -> ModuleContext:
             except Exception as e:  # noqa: BLE001
                 print(f"[visualize] 动图失败: {e}")
 
+        # ===== 课题三自己出的成品图（直接取用官方版本） =====
+        if plot in ("product", "official", "官方图", "他们的图", "成品图",
+                    "anim", "官方动图"):
+            try:
+                from . import viz_extra
+                images.extend(viz_extra.attach_official_products(
+                    ctx, want_anim=plot in ("anim", "官方动图")))
+            except Exception as e:  # noqa: BLE001
+                print(f"[visualize] 取官方成品图失败: {e}")
+
         # ===== 预报 vs 实测 密度散点（台风个例有实测时） =====
         if want("validation"):
             try:
