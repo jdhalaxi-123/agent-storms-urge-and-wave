@@ -8,12 +8,46 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import gradio as gr
 
 from orchestrator import asr, llm, memory, paths
 
 THINKING = "🔍 正在思考中，请稍候…"
+
+
+def _version_banner() -> str:
+    """启动横幅：把版本号和**正在运行的项目目录**打出来。
+
+    这一行是排障关键——机器上常常同时存在好几份解压副本
+    （GitHub 的 ZIP 解压后目录名都一样，重复下载会变成 "... (1)"），
+    看到这行就能确认"现在跑的到底是哪一份、是不是最新代码"。
+    """
+    root = Path(__file__).resolve().parent
+    ver = "未知"
+    vf = root / "VERSION.txt"
+    if vf.exists():
+        for line in vf.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("版本号"):
+                ver = line.split(":", 1)[1].strip()
+                break
+    marker = "无"
+    cat = root / "orchestrator" / "ftp_catalog.py"
+    if cat.exists() and "VERSION-MARKER: fetch-fail-fix-v1" in cat.read_text(
+            encoding="utf-8", errors="ignore"):
+        marker = "有（新代码）"
+    print("=" * 70)
+    print(f"  风暴潮与海浪智能预报助手   版本 {ver}")
+    print(f"  运行目录：{root}")
+    print(f"  下载失败修复标记：{marker}")
+    print(f"  页面地址：http://127.0.0.1:{os.environ.get('STORM_PORT', '7860')}")
+    print("=" * 70)
+    return ver
+
+
+APP_VERSION = _version_banner()
+
 
 # 启动时把数据目录树建好（默认 <项目>/stormdata，可用 .env 的 DATA_ROOT 改）
 try:

@@ -1,0 +1,30 @@
+# 统一换行符：Windows 脚本必须是 CRLF
+# （从 GitHub 下载 ZIP 时也会按这里的规则转换，避免 cmd.exe 因 LF 换行
+#   出现"双击没反应/一闪而过"的问题）
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Python / Markdown 用 LF 即可
+*.py    text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+
+# 二进制文件不做转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.tif   binary
+*.tiff  binary
+*.ico   binary
+*.zip   binary
+*.nc    binary
+*.shp   binary
+*.shx   binary
+*.dbf   binary
+*.prj   binary
+*.cpg   binary
+*.docx  binary
+*.npy   binary
+*.pyc   binary
