@@ -354,7 +354,9 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
     }
 
     def _note(p):
-        return _NOTES.get(str((p or {}).get("kind") or ""), "课题三成品图")
+        _t = _NOTES.get(str((p or {}).get("kind") or ""), "课题三成品图")
+        _d = str((p or {}).get("date") or "")
+        return f"{_t}（产品日期 {_d}）" if _d else _t
 
     def _first(kinds, c):
         for k in kinds:
@@ -409,6 +411,37 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
         p = _first(("timeseries", "curve_1"), code)
         if p:
             got.append(p)
+
+    # ===== 时效校验：成品图日期和当前数据日期对不上（差 >3 天）→ 不给这张图 =====
+    #   实例：浮标单点图停在 20260401，而结论数据是 20260919，
+    #   拿旧图配新数字就是"乱挪用"，宁可回落到自绘的新鲜曲线。
+    _ref = str(_geo.get("field_date") or "").strip()
+    if len(_ref) != 8 or not _ref.isdigit():
+        _ref = ""
+    if _ref and got:
+        import datetime as _dt
+        try:
+            _r = _dt.datetime.strptime(_ref, "%Y%m%d")
+        except ValueError:
+            _r = None
+        if _r:
+            _keep, _skip = [], []
+            for g in got:
+                _d = str(g.get("date") or "")
+                try:
+                    _gd = _dt.datetime.strptime(_d, "%Y%m%d")
+                except ValueError:
+                    _gd = None
+                if _gd and abs((_r - _gd).days) > 3:
+                    _skip.append(g)
+                else:
+                    _keep.append(g)
+            if _skip:
+                got = _keep
+                ctx.results["official_skipped"] = [
+                    f"{s.get('file')}（产品日期 {s.get('date')}，与当前数据 {_ref} 不符）"
+                    for s in _skip]
+                print(f"[viz_extra] 成品图时效不符，已跳过：{ctx.results['official_skipped']}")
 
     ctx.results["official_products"] = got
     _notes = {}

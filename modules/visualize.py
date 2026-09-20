@@ -305,9 +305,12 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 images.append(str(fp))
 
         # ===== 海浪波高曲线 =====
-        # ⚠️ 按用户要求：自绘图**只保留区域场分布图**，站点/时序曲线不再自绘
-        #    （FTP 上的静态成品图里有站点时序图，直接用他们的）。
-        if False and want("wave") and not _official:
+        # 自绘图范围（用户口径）= 区域场分布图 + **点名地点的海浪过程曲线**。
+        #   · 「厦门海浪」「崇武的海浪」这类点名地点 → 画这条曲线（FTP 上没有对应成品图）
+        #   · 「闽南的海浪场」这类要"场"的 → 只出自绘区域场图，不画曲线
+        #   · 全场/浮标站号 → 用课题三成品（动图/单点图），不重复自绘
+        if (want("wave") and not _official
+                and not ctx.request.get("field_query")):
             geo_w = ctx.results.get("geo_stats", {}) or {}
             wsite = [s for s in (geo_w.get("sites") or []) if s.get("series_wave_m")]
             ws = ctx.results.get("wave_stats", {}) or {}
