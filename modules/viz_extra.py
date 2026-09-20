@@ -340,6 +340,21 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
     if mode in ("station", "field"):
         _station = (mode == "station")
 
+    # 每张成品图的**准确说明**（交给模型照说，避免它把场图/场动图说成"某站的图"）
+    _NOTES = {
+        "field_max": "课题三成品图 · 0.01° 最大增水场图（福建中南部，非单站）",
+        "field_max_1": "课题三成品图 · 0.25° 全场最大增水场图（非单站）",
+        "timeseries": "课题三成品图 · 0.01° 站点增水时序图（单站）",
+        "curve_1": "课题三成品图 · 0.25° 站点增水曲线图（单站）",
+        "anim": "课题三成品动图 · 0.01° 福建中南部增水场动图（覆盖该海域，**非单站动图**）",
+        "wind_surge": "课题三成品动图 · 0.25° 全场 风+增水双面板动图（色标固定）",
+        "wave_double": "课题三成品动图 · 全场 风+浪双面板动图",
+        "buoy_viz": "课题三成品图 · 浮标单点海浪图（单点）",
+    }
+
+    def _note(p):
+        return _NOTES.get(str((p or {}).get("kind") or ""), "课题三成品图")
+
     def _first(kinds, c):
         for k in kinds:
             p = ai_daily.fetch_product(k, code=c, date=d8)
@@ -369,11 +384,19 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
             if p:
                 got.append(p)
     elif _station and not _broad:
-        # 站点：要动图就给 0.01° 细网格的增水动图；否则给他们的站点时序图
-        p = (_first(("anim", "wind_surge"), code) if _want_anim
-             else _first(("timeseries", "curve_1"), code))
-        if p:
-            got.append(p)
+        # 站点：**他们只有单站的静态时序图，没有单站动图**。
+        # 要动图时：站点时序图 + 覆盖该海域的场动图（image_notes 里注明非单站动图）
+        if _want_anim:
+            p = _first(("timeseries", "curve_1"), code)
+            if p:
+                got.append(p)
+            p = _first(("anim",), code)
+            if p:
+                got.append(p)
+        else:
+            p = _first(("timeseries", "curve_1"), code)
+            if p:
+                got.append(p)
     elif _want_anim:
         # 全场/大范围 + 要动图：优先"风+增水双面板"（全场 0.25°），退而取 0.01° 增水动图
         p = _first(("wind_surge", "anim"), code)
@@ -389,6 +412,11 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
             got.append(p)
 
     ctx.results["official_products"] = got
+    _notes = {}
+    for g in got:
+        if g.get("path"):
+            _notes[str(g["path"])] = _note(g)
+    ctx.results["image_notes"] = _notes
     return [g["path"] for g in got if g.get("path")]
 
 

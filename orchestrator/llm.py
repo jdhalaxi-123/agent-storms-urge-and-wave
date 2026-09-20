@@ -65,6 +65,13 @@ SYSTEM_PROMPT = (
     "**绝对不要沿用上一轮对话里的地名**（比如上文在聊厦门，用户说“我想看全场的”就填“全场”，不要填厦门）。"
     "用户要多种时才用 all。切忌用户只要一种却把各类图都画出来。"
     "用户没提图时不要传 plot（默认按灾种给一张核心图）。"
+    "【图片说明以 image_notes 为准】工具返回的 image_notes 逐张写明了每张图是什么，"
+    "**必须照它说，不许自己发挥**。特别注意："
+    "① 他们**没有“单站动图”**——站点要动图时，给的是“覆盖该海域的 0.01° 场动图”，"
+    "必须说成“福建中南部 0.01° 增水场动图（覆盖厦门海域）”，"
+    "**绝对不许说成“厦门站的动图/崇武站的动图”**；"
+    "② images 里没有的图，一句都不许说“已生成”；"
+    "③ 系统没有的产品就说没有（例如“他们没出单站动图”），**不要编**。"
     "【动图/动画】用户说“动图/动画/动起来/gif”时传 plot=gif。"
     "系统**有**这些成品动图（**不是只有风场动画**）："
     "① 增水动图（0.01° 细网格，站点/福建中南部）；② 全场增水动图（0.25° 全场）；"
@@ -105,6 +112,9 @@ SYSTEM_PROMPT = (
     "用户问「某个地方的浪」（如「厦门的海浪」）时，按地名取**模式场最近格点**并在回复里说明这一点；"
     "用户给的是浮标站号（如「C6W10 的浪高」）时按原样填进 region，系统会取真正的海浪单点产品。"
     "若用户问「有哪些浮标站 / 浪的站号」，用 query_options 的 wave_point_stations 回答。"
+    "【简报行由程序追加】**正式简报的下载链接由程序在回复末尾自动追加**。"
+    "你在回复里**不要写简报文件名、不要写“点击打开”、不要给下载链接**，"
+    "也不要写“已生成简报 Word”之类的话——只讲结论和数据的要点即可。"
     "【覆盖范围】若 forecast_risk 返回“不在覆盖范围”的说明（如上海、青岛等），"
     "直接如实转达该说明，**绝不可自行编造该海域的任何数据或结论**。"
     "【需追问】若 forecast_risk 返回“范围较大，请具体说明位置”的追问说明"
@@ -402,11 +412,10 @@ def _call_forecast(args: Dict[str, Any], user_text: str = "") -> Dict[str, Any]:
     }
     result = engine.run_with_slots(
         slots, raw=user_text or json.dumps(args, ensure_ascii=False))
-    # 把 Word 导出路径一并交给 LLM，方便在回复里提示下载
-    if result.get("docx_path"):
-        result["reply"] = (
-            f"{result.get('reply', '')}\n\n📄 正式简报 Word 已生成：{result['docx_path']}"
-        )
+    # ⭐ 简报下载行由 main.py 统一追加（读 briefs/.last_brief，带可点链接）。
+    #    这里**必须把 docx 信息从工具返回里摘掉**：模型一旦看到路径，
+    #    就会自己再写一行"📄 正式简报：xxx.docx　点击打开"，末尾变成两条简报行。
+    result.pop("docx_path", None)
     # ⭐ 出图失败时把原因交给模型，让它如实告诉用户（以前只打在控制台，界面上看不出）
     vis_err = result.get("plot_error")
     if vis_err and not (result.get("images") or []):
@@ -538,9 +547,5 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
     # 轮数用尽：强制不带工具出最终文本，保证一定给用户一个回复
     resp = client.chat.completions.create(model=MODEL, messages=messages, timeout=120)
     _final = resp.choices[0].message.content or "（未生成回复，请重试）"
-    if docx_made:      # 简报信息由程序追加，避免模型漏说
-        from pathlib import Path as _P
-        _last = _P(docx_made[-1])
-        _final += (f"\n\n📄 已生成正式简报：**{_last.name}**\n"
-                   f"（存放目录：{_last.parent}）")
+    # 简报行只由 main.py 追加（此处不再补，避免出现两条）
     return _final, images

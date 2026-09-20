@@ -174,6 +174,8 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     return {
         "reply": ctx.results.get("brief", {}).get("markdown", ""),
         "images": ctx.results.get("visualize", {}).get("images", []),
+        # ⭐ 每张图的准确说明（模型必须照这个说，不能把场图/场动图说成"某站的图"）
+        "image_notes": ctx.results.get("image_notes") or {},
         "docx_path": ctx.results.get("brief", {}).get("docx_path"),
         "brief_template": ctx.results.get("brief", {}).get("template"),
         # 每日风场（任务三）有独立的更新节奏，单独告知，别和风暴潮预报的时效混在一起说
