@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 from orchestrator import ftp_catalog as fc  # noqa: E402
 from orchestrator import paths  # noqa: E402
 
-DF = "/group3/dailyforecast"
+DF = "/group3/ATM_new/dailyforecast"
 POINT_DIR = f"{DF}/storm_surge_point_system/nc_file"
 SURGE_FIELD_DIR = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"
 WAVE_FIELD_DIR = f"{DF}/AutoWave/res_ATM"

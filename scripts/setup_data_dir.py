@@ -42,9 +42,9 @@ def main():
         print("\n" + "=" * 70)
         print(f"取数落盘自检（只下小文件）：{day} ~ {end}")
         targets = [
-            f"/group3/dailyforecast/storm_surge_point_system/nc_file/"
+            f"/group3/ATM_new/dailyforecast/storm_surge_point_system/nc_file/"
             f"storm_surge_forecast_sp_XMN_{day}-{end}.nc",
-            f"/group3/dailyforecast/storm_surge_point_system/nc_file/"
+            f"/group3/ATM_new/dailyforecast/storm_surge_point_system/nc_file/"
             f"storm_surge_forecast_sp_CWU_{day}-{end}.nc",
         ]
         # 台风个例：从目录里真实挑一个小文件（站点增水 8.5 KB）

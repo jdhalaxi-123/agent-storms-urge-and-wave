@@ -3,7 +3,7 @@
 
 数据性质（已核实）
 ------------------
-`/group3/dailyforecast/` 下**全部是人工智能方法的预报结果**，模型为 `CuboidWaveModel`
+`/group3/ATM_new/dailyforecast/` 下**全部是人工智能方法的预报结果**，模型为 `CuboidWaveModel`
 （文件属性 `title/institution/source` 均指向该模型，变量名带 `_torch` 后缀）。
 `ATM` 与 `EC` **不是"AI 与数值"之分，而是"同一 AI 模型的两种风场输入"**：
     ATM → 课题三 `/group3/shared_wind_inputs/atm_forecast_YYYYMMDD.nc`
@@ -34,7 +34,7 @@ import numpy as np
 from orchestrator import ftp_catalog as fc
 
 # 各数据源路径
-DF = "/group3/dailyforecast"
+DF = "/group3/ATM_new/dailyforecast"
 SURGE_FIELD_DIR = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"      # atm_forecast_YYYYMMDD/
 WAVE_FIELD_DIR = f"{DF}/AutoWave/res_ATM"                                   # YYYYMMDD_wave_forecast_1h.nc
 WAVE_FIELD_DIR_EC = f"{DF}/AutoWave/res_EC"
@@ -932,7 +932,7 @@ def overview() -> Dict[str, Any]:
         "wave_field_n": len(wd),
         "tide_dates": td[-6:], "tide_latest": td[-1] if td else "", "tide_n": len(td),
         "wind_dates": nd[-6:], "wind_latest": nd[-1] if nd else "", "wind_n": len(nd),
-        "source": "课题三 /group3/dailyforecast + /group3/wind（人工智能方法）",
+        "source": "课题三 /group3/ATM_new/dailyforecast + /group3/wind（人工智能方法）",
     }
 
 

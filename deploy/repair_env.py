@@ -105,7 +105,7 @@ def check_ftp() -> bool:
     try:
         sys.path.insert(0, str(ROOT))
         from orchestrator import ftp_catalog as fc
-        remote = ("/group3/dailyforecast/storm_surge_point_system/nc_file/"
+        remote = ("/group3/ATM_new/dailyforecast/storm_surge_point_system/nc_file/"
                   "storm_surge_forecast_sp_XMN_20260916-20260922.nc")
         lp = fc.fetch(remote)
         if lp and Path(lp).exists():

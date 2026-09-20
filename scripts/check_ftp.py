@@ -99,9 +99,9 @@ def main() -> int:
         import re
         checks = [
             ("每日·风场", "/group3/wind", r"atm_forecast_(\d{8})\.nc"),
-            ("每日·AI增水精细场", "/group3/dailyforecast/storm_surge_for_spatiotemporal_2/results_atm",
+            ("每日·AI增水精细场", "/group3/ATM_new/dailyforecast/storm_surge_for_spatiotemporal_2/results_atm",
              r"surge_predicted_(\d{8})\.nc"),
-            ("每日·AI海浪场", "/group3/dailyforecast/AutoWave/res_ATM",
+            ("每日·AI海浪场", "/group3/ATM_new/dailyforecast/AutoWave/res_ATM",
              r"(\d{8})_wave_forecast_1h\.nc"),
             ("数值·海浪", "/group1/data", r"WaveFc(\d{10})"),
         ]
