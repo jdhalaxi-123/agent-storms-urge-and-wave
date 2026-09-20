@@ -304,8 +304,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
             if fp:
                 images.append(str(fp))
 
-        # ===== 海浪波高曲线（已有官方成品图就不重复画） =====
-        if want("wave") and not _official:
+        # ===== 海浪波高曲线 =====
+        # ⚠️ 按用户要求：自绘图**只保留区域场分布图**，站点/时序曲线不再自绘
+        #    （FTP 上的静态成品图里有站点时序图，直接用他们的）。
+        if False and want("wave") and not _official:
             geo_w = ctx.results.get("geo_stats", {}) or {}
             wsite = [s for s in (geo_w.get("sites") or []) if s.get("series_wave_m")]
             ws = ctx.results.get("wave_stats", {}) or {}
@@ -338,8 +340,9 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 plt.close(fig)
                 images.append(str(path))
 
-        # ===== 站点增水/水位过程曲线（已有官方成品图就不重复画） =====
-        if want("surge_station") and not _official:
+        # ===== 站点增水/水位过程曲线 =====
+        # ⚠️ 同上：不再自绘，站点曲线一律用 FTP 上的成品图
+        if False and want("surge_station") and not _official:
             geo = ctx.results.get("geo_stats", {}) or {}
             sites = geo.get("sites") or []
             if sites:
@@ -351,7 +354,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
         # 每日区域查询已经用 AI 当天场画过区域分布图（ai_field），
         # 不要再用本地遗留的个例文件画一遍（曾出现"问福建沿海的场，
         # 画出来的是 2526 台风旧场图"）。
-        if want("surge_field") and not ctx.results.get("ai_field"):
+        if (want("surge_field") and not _official
+                and not ctx.results.get("ai_field")):
             field_imgs = _draw_field_map(OUT_DIR, ctx, tag)
             images.extend(field_imgs)
 
@@ -360,8 +364,9 @@ def run(ctx: ModuleContext) -> ModuleContext:
             wind_imgs = _draw_wind_field(OUT_DIR, ctx, tag)
             images.extend(wind_imgs)
 
-        # ===== 风 + 浪 双联图（课题三投产 GIF 的同款排布） =====
-        if want("wind_wave"):
+        # ===== 风 + 浪 双联图 =====
+        # ⚠️ 按用户要求不再自绘（他们的成品图里有风+浪双面板动图）
+        if False and want("wind_wave"):
             try:
                 from . import viz_extra
                 images.extend(viz_extra.draw_wind_wave_pair(OUT_DIR, ctx, tag))
@@ -375,7 +380,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
         _raw_l = str(ctx.request.get("raw", "") or "").lower()
         _wind_anim = ("风" in _raw_l) or ("wind" in _raw_l) or plot == "wind_wave"
         _surge_anim = (disaster == "storm_surge") and not _wind_anim
-        if (plot in ("gif", "animation", "动图", "动画") and not _official
+        # ⚠️ 按用户要求：自绘图只留区域场分布图，动图不再自绘
+        if (False and plot in ("gif", "animation", "动图", "动画") and not _official
                 and not _surge_anim):
             try:
                 from . import viz_extra
@@ -397,7 +403,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 _fail(ctx, "取官方成品图", e)
 
         # ===== 预报 vs 实测 密度散点（台风个例有实测时） =====
-        if want("validation"):
+        # ⚠️ 按用户要求不再自绘
+        if False and want("validation"):
             try:
                 from . import viz_extra
                 images.extend(viz_extra.draw_validation_density(OUT_DIR, ctx, tag))
@@ -407,17 +414,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
         # ===== 兜底：一张图都没出来但手上有数据 → 至少给过程曲线 =====
         # （典型场景：模型给了 plot=surge_field，但站点查询没有场数据，
         #   场图分支空转，曲线分支又被"已指定图类型"跳过 → 结果 0 张图）
+        # ⚠️ 兜底也不再自绘站点曲线：自绘图只保留区域场分布图
+        #    （一张图都没有时，由对话如实说明，不拿不相干的图凑数）
         if not images:
-            _geo = ctx.results.get("geo_stats", {}) or {}
-            _sites = _geo.get("sites") or []
-            if _sites:
-                try:
-                    p = _draw_surge(OUT_DIR, _sites, ctx, tag)
-                    if p:
-                        images.append(str(p))
-                        print("[visualize] 已用站点过程曲线兜底出图")
-                except Exception as e:  # noqa: BLE001
-                    _fail(ctx, "兜底曲线", e)
+            print("[visualize] 本轮没有出图（自绘图只保留区域场分布图）")
     except Exception as e:  # noqa: BLE001
         _fail(ctx, "出图", e)
 
