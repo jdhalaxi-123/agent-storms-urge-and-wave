@@ -348,7 +348,8 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
         return None
 
     # 是否明确要动图（用户的"动图/动画"或调用方 want_anim）
-    _want_anim = want_anim or _plt in ("gif", "animation", "动图", "动画")
+    _want_anim = (want_anim or bool(ctx.request.get("want_anim"))
+                  or _plt in ("gif", "animation", "动图", "动画"))
 
     # 大范围（跨度 >4°，如"全场"）优先按"场"给图；
     # 注意：场查询的 geo_stats 里通常也带站点，不能因此被误判成"纯站点问法"

@@ -54,7 +54,7 @@ SYSTEM_PROMPT = (
     "【画图】当用户要求“画/看/展示”某类图时，调用 forecast_risk 工具，"
     "并通过 plot 参数**只指定用户要的那一类图**（wind=风场、surge_station=站点过程曲线、"
     "surge_field=**风暴潮/增水场空间分布**、wave_field=**海浪场空间分布**、"
-    "wave=海浪波高曲线、wind_wave=风+浪并排双联图、gif=风场动图、"
+    "wave=海浪波高曲线、wind_wave=风+浪并排双联图、gif=动图/动画、"
     "validation=预报与实测对比图）；"
     "【要“场”怎么填】用户说“**厦门沿海的海浪场**”“闽北沿海的增水分布”“XX沿海的波高分布图”这类话时："
     "region 填那个地名、disaster 按灾种、plot 填 wave_field（浪）或 surge_field（潮/增水），"
@@ -65,6 +65,13 @@ SYSTEM_PROMPT = (
     "**绝对不要沿用上一轮对话里的地名**（比如上文在聊厦门，用户说“我想看全场的”就填“全场”，不要填厦门）。"
     "用户要多种时才用 all。切忌用户只要一种却把各类图都画出来。"
     "用户没提图时不要传 plot（默认按灾种给一张核心图）。"
+    "【动图/动画】用户说“动图/动画/动起来/gif”时传 plot=gif。"
+    "系统**有**这些成品动图（**不是只有风场动画**）："
+    "① 增水动图（0.01° 细网格，站点/福建中南部）；② 全场增水动图（0.25° 全场）；"
+    "③ 风+增水双面板动图（全场）；④ 风+浪双面板动图（全场，ATM 起报）。"
+    "**严禁回答“系统没有增水动图”“动画只有风场才有”这类话——那是错的**，"
+    "工具返回的 images 里给了动图就照实说这是什么动图。"
+    "闽南、厦门沿海这类**局地**动图，系统会自己画（他们没局地成品图）。"
     "**站点问题不要传 surge_field**：问“厦门/崇武/晋江/东山东港 的风暴潮/海浪”时，"
     "默认那张站点过程曲线就是对的东西，不要传 plot（传了反而可能出不来图）。"
     "【风场】问“今天的风场/风有多大/画一下风场”时传 plot=wind："
@@ -181,7 +188,10 @@ FORECAST_TOOL = {
                         "wave_field=**海浪场空间分布**（如“厦门沿海的海浪场”）；"
                         "wave=海浪波高曲线；"
                         "wind_wave=风+浪并排双联图（业务上最常用的合成图）；"
-                        "gif=风场动图（较慢，明确要“动图/动画”时才用）；"
+                        "gif=**动图/动画**（用“动图/动画/动起来”时才用；"
+                        "系统有 4 类成品动图：增水动图 0.01° 细网格、全场增水动图 0.25°、"
+                        "风+增水双面板、风+浪双面板；局地如闽南会自己画。"
+                        "**不要说“系统只有风场动画”**）；"
                         "validation=预报与实测对比密度散点（仅台风个例有实测时）；"
                         "product=**直接用课题三自己出的成品图**（官方版本：0.01° 最大增水场图 "
                         "＋该站时序图；用户说“用他们的图/官方图/课题三的图”时填这个）；"
@@ -221,7 +231,8 @@ def _call_options(args: Dict[str, Any]) -> Dict[str, Any]:
         "disaster": {"storm_surge": "风暴潮（增水/总水位/倒灌风险）", "wave": "海浪（有效波高/浪高）"},
         "plots": {"surge_station": "站点过程曲线", "surge_field": "全场增水分布",
                   "wave": "海浪波高曲线", "wind": "风场", "wind_wave": "风+浪并排双联图",
-                  "all": "全部"},
+                  "gif": "动图/动画（增水动图、全场增水动图、风+增水双面板、风+浪双面板）",
+                  "product": "课题三出的官方成品图", "all": "全部"},
         "domain": geo_domain.DOMAIN_DESC,
         "out_of_domain_examples": ["上海", "青岛", "大连", "深圳", "宁波", "舟山", "海口"],
     }
@@ -369,8 +380,12 @@ def _call_ftp_sync(args: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
-def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
-    """执行预报工具：把 LLM 填的参数转成槽位，跑编排引擎。"""
+def _call_forecast(args: Dict[str, Any], user_text: str = "") -> Dict[str, Any]:
+    """执行预报工具：把 LLM 填的参数转成槽位，跑编排引擎。
+
+    user_text：**用户这一轮的原话**。必须传，否则"动图/动画"这类关键词会丢，
+    引擎里"原话要动图 → 一定出动图"的兜底就失效（见 engine.run_with_slots）。
+    """
     from . import engine  # 延迟导入，避免循环依赖
 
     slots = {
@@ -383,9 +398,10 @@ def _call_forecast(args: Dict[str, Any]) -> Dict[str, Any]:
         "plot": args.get("plot", ""),
         "lon": args.get("lon"),
         "lat": args.get("lat"),
-        "raw": "llm",
+        "raw": user_text or "llm",
     }
-    result = engine.run_with_slots(slots, raw=json.dumps(args, ensure_ascii=False))
+    result = engine.run_with_slots(
+        slots, raw=user_text or json.dumps(args, ensure_ascii=False))
     # 把 Word 导出路径一并交给 LLM，方便在回复里提示下载
     if result.get("docx_path"):
         result["reply"] = (
@@ -422,8 +438,8 @@ def _system_prompt() -> str:
             "不要凭训练记忆猜现在是几号。")
 
 
-def _run_tool(tc) -> Tuple[Dict[str, Any], List[str]]:
-    """执行一个工具调用，返回 (结果, 新增图片)。"""
+def _run_tool(tc, user_text: str = "") -> Tuple[Dict[str, Any], List[str]]:
+    """执行一个工具调用，返回 (结果, 新增图片)。user_text = 用户本轮原话。"""
     try:
         args = json.loads(tc.function.arguments or "{}")
     except json.JSONDecodeError:
@@ -439,7 +455,7 @@ def _run_tool(tc) -> Tuple[Dict[str, Any], List[str]]:
     if name == "query_options":
         return _call_options(args), []
 
-    result = _call_forecast(args)
+    result = _call_forecast(args, user_text=user_text)
     return result, list(result.get("images") or [])
 
 
@@ -503,7 +519,7 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
                 result, new_images = seen[key]
             else:
                 try:
-                    result, new_images = _run_tool(tc)
+                    result, new_images = _run_tool(tc, user_text=str(message))
                 except Exception as exc:  # 工具异常不能让整轮对话挂掉
                     result, new_images = {"ok": False,
                                           "error": f"{type(exc).__name__}: {exc}"}, []

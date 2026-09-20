@@ -38,6 +38,12 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     #     就以该地点为中心、东南西北各 0.8°（约 90 km）动态取一个框。
     _plot = str(slots.get("plot", "") or "").strip().lower()
     _field_plot = _plot in ("surge_field", "wave_field", "field", "distribution")
+
+    # ⭐ 用户原话里明确要"动图"时打硬标记：
+    #    LLM 有时把 plot 给成静态图（如 surge_station），"动图"两个字就丢了。
+    _raw_text = str(raw or slots.get("raw", "") or "")
+    if any(k in _raw_text.lower() for k in ("动图", "动画", "动效", "gif")):
+        slots["want_anim"] = True
     if _field_plot and not slots.get("field_query"):
         box = geo_domain.region_box(region) or geo_domain.dynamic_box(region)
         if box:
