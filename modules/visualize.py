@@ -369,8 +369,14 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 _fail(ctx, "风浪双联图", e)
 
         # ===== 风 + 浪 动图（明确要"动图/animation"时才做，较慢） =====
-        #   全场/站点已用对方的成品动图 → 不再自己画；局地（闽南…）才自绘
-        if plot in ("gif", "animation", "动图", "动画") and not _official:
+        #   全场/站点已用对方的成品动图 → 不再自己画；局地才自绘。
+        #   ⚠️ 我们这张自绘动图画的是**风场**：用户要的是"增水/风暴潮"动图时
+        #      绝不能拿它充数（用户明确要求"没有就不要乱编"）。
+        _raw_l = str(ctx.request.get("raw", "") or "").lower()
+        _wind_anim = ("风" in _raw_l) or ("wind" in _raw_l) or plot == "wind_wave"
+        _surge_anim = (disaster == "storm_surge") and not _wind_anim
+        if (plot in ("gif", "animation", "动图", "动画") and not _official
+                and not _surge_anim):
             try:
                 from . import viz_extra
                 images.extend(viz_extra.draw_wind_wave_gif(OUT_DIR, ctx, tag))
@@ -414,6 +420,32 @@ def run(ctx: ModuleContext) -> ModuleContext:
                     _fail(ctx, "兜底曲线", e)
     except Exception as e:  # noqa: BLE001
         _fail(ctx, "出图", e)
+
+    # ===== 给我们自己画的图也逐张写清说明（模型必须照 image_notes 说） =====
+    #   否则模型只能靠文件名猜，会把"风场动图"说成"风+浪双面板动画"这种错话。
+    try:
+        _notes = ctx.results.setdefault("image_notes", {})
+        _SELF = [
+            ("wind_wave_anim", "本系统自绘 · 风场动图（风速填色+风向箭头，**不含海浪面板**）"),
+            ("wind_wave_pair", "本系统自绘 · 风与浪并排静态双联图"),
+            ("wind_field", "本系统自绘 · 风场图（风速填色+风向箭头）"),
+            ("field_ai_surge", "本系统自绘 · 风暴增水场空间分布图"),
+            ("field_ai_wave", "本系统自绘 · 海浪有效波高场空间分布图"),
+            ("surge_series", "本系统自绘 · 增水时序曲线"),
+            ("wave_series", "本系统自绘 · 有效波高时序曲线"),
+            ("surge_field", "本系统自绘 · 增水场分布图"),
+        ]
+        for _p in images:
+            _k = str(_p)
+            if _k in _notes:
+                continue                       # 课题三成品图已有更准确的说明
+            _b = Path(_k).name
+            for _pre, _txt in _SELF:
+                if _b.startswith(_pre):
+                    _notes[_k] = _txt
+                    break
+    except Exception as e:  # noqa: BLE001
+        print(f"[visualize] 写 image_notes 失败: {e}")
 
     ctx.results["visualize"] = {"images": images,
                                 "error": ctx.results.get("visualize_error", "")}

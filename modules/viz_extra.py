@@ -384,19 +384,11 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
             if p:
                 got.append(p)
     elif _station and not _broad:
-        # 站点：**他们只有单站的静态时序图，没有单站动图**。
-        # 要动图时：站点时序图 + 覆盖该海域的场动图（image_notes 里注明非单站动图）
-        if _want_anim:
-            p = _first(("timeseries", "curve_1"), code)
-            if p:
-                got.append(p)
-            p = _first(("anim",), code)
-            if p:
-                got.append(p)
-        else:
-            p = _first(("timeseries", "curve_1"), code)
-            if p:
-                got.append(p)
+        # 站点：**他们只有单站静态过程曲线，压根没有"单站动图"**。
+        # 要动图也一样只给这张静态曲线——绝不拿场动图去顶（用户明确要求"没有就不要乱编"）。
+        p = _first(("timeseries", "curve_1"), code)
+        if p:
+            got.append(p)
     elif _want_anim:
         # 全场/大范围 + 要动图：优先"风+增水双面板"（全场 0.25°），退而取 0.01° 增水动图
         p = _first(("wind_surge", "anim"), code)
