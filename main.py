@@ -80,6 +80,20 @@ _check_plot_deps()
 
 
 
+def _clean_reply(text: str) -> str:
+    """回复定型前的清洗：
+
+    ① 删掉模型自己编的"简报行"——历史里有这种格式，它会照着编，
+       甚至编出不存在的文件名（如 风暴潮2026-087_全场风暴潮无预警.docx）；
+       真实简报行只由 _append_brief_line 追加一条。
+    ② 114.5~127.5 这种写法在聊天窗口会被当成删除线，显示成 114.5127.5 → 换成 –。
+    """
+    import re as _re
+    t = llm.strip_brief_lines(text)
+    t = _re.sub(r"(?<=\d)\s*[~～]\s*(?=\d)", "–", t)
+    return t
+
+
 def _append_brief_line(text: str) -> str:
     """把最近生成的简报以可点链接形式追加到回复（不经模型转述）。"""
     import time
@@ -162,6 +176,7 @@ def _respond(text, audio_path, history):
         memory.append_chat(text, bot_text, {"images": len(images or [])})
     except Exception:
         pass
+    bot_text = _clean_reply(bot_text)
     bot_text = _append_brief_line(bot_text)
     if images or True:
         new_history = history + [[text, (bot_text, images or [])]]

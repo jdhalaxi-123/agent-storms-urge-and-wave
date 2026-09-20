@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -145,7 +146,11 @@ SYSTEM_PROMPT = (
     "用户问「某个地方的浪」（如「厦门的海浪」）时，按地名取**模式场最近格点**并在回复里说明这一点；"
     "用户给的是浮标站号（如「C6W10 的浪高」）时按原样填进 region，系统会取真正的海浪单点产品。"
     "若用户问「有哪些浮标站 / 浪的站号」，用 query_options 的 wave_point_stations 回答。"
+    "【范围写法】经纬度范围一律写成“114.5–127.5°E”“17.0–29.5°N”或“114.5 至 127.5°E”，"
+    "**不要用 ~**——聊天窗口会把 ~ 当成删除线，114.5~127.5 会显示成 114.5127.5。"
     "【简报行由程序追加】**正式简报的下载链接由程序在回复末尾自动追加**。"
+    "历史对话里出现过“📄 本次正式简报：xxx.docx　点击打开”这种行，那是程序加的，"
+    "**绝对不要模仿、不要自己写简报文件名/链接**（曾编出磁盘上根本不存在的文件名）。"
     "你在回复里**不要写简报文件名、不要写“点击打开”、不要给下载链接**，"
     "也不要写“已生成简报 Word”之类的话——只讲结论和数据的要点即可。"
     "【覆盖范围】若 forecast_risk 返回“不在覆盖范围”的说明（如上海、青岛等），"
@@ -398,6 +403,22 @@ def _get_client() -> OpenAI:
     return _client
 
 
+# 「简报行」：程序统一追加唯一一条；模型不许自己写，也不许模仿历史里的样子
+#   （曾出现模型编出"风暴潮2026-087_全场风暴潮无预警.docx"这种磁盘上根本没有的文件名）
+BRIEF_LINE_RE = re.compile(
+    r"^[^\n]*(?:📄|正式简报|/gradio_api/file=)[^\n]*\n?",
+    re.M,
+)
+
+
+def strip_brief_lines(text: str) -> str:
+    """删掉所有"简报行"（📄/正式简报/下载链接），并压掉多余空行。"""
+    if not text:
+        return text
+    out = BRIEF_LINE_RE.sub("", str(text))
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
 def _call_ftp(args: Dict[str, Any]) -> Dict[str, Any]:
     """执行 FTP 查询工具：列目录 或 关键字搜索。"""
     from . import ftp_client
@@ -524,7 +545,10 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
         if user_msg:
             messages.append({"role": "user", "content": str(user_msg)})
         if bot_msg:
-            messages.append({"role": "assistant", "content": str(bot_msg)})
+            # 历史里的"简报行"先洗掉：模型看不到就不会照着编（曾编出不存在的文件名）
+            _bm = strip_brief_lines(str(bot_msg))
+            if _bm:
+                messages.append({"role": "assistant", "content": _bm})
     messages.append({"role": "user", "content": str(message)})
 
     images: List[str] = []
