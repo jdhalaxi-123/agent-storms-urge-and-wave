@@ -125,6 +125,29 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     # 阶段一：分析
     ctx = modules.meta.run(ctx)        # ① 定位 NC
     ctx = modules.geo_stats.run(ctx)   # ② 提取 + 插值 + 统计
+
+    # ⭐ 兜底：站点/场/序列一个都没取到 → 如实说明并请用户给明确位置，
+    #    绝不能继续硬编一份"简报"（曾出现"未知海域风暴潮风险简报…橙色预警"这类假结论）
+    _g = ctx.results.get("geo_stats") or {}
+    if not (_g.get("sites") or _g.get("field_stats") or _g.get("series")):
+        _r = str(slots.get("region") or "").strip()
+        memory.append({"request": raw or slots.get("raw", ""), "slots": slots,
+                       "status": "no_data"})
+        return {
+            "reply": (f"抱歉，没有取到「{_r or '该海域'}」的预报数据，暂时无法给出结论，"
+                      "也就不出图和简报了。\n\n"
+                      "请换一个更明确的位置再问一次，例如：\n"
+                      "- 站点：厦门、崇武、晋江、东山东港\n"
+                      "- 区域：闽南、闽东、台湾海峡，或直接说「全场」看整个覆盖范围\n"
+                      "- 也可以直接给经纬度，如 118.5°E, 24.5°N\n\n"
+                      f"**当前可查询的站点**：{geo_domain.SUPPORTED_STATIONS}\n"
+                      f"**覆盖范围**：{geo_domain.DOMAIN_DESC}"),
+            "images": [],
+            "docx_path": None,
+            "brief_template": "no_data",
+            "meta": {"status": "no_data", "region": _r},
+        }
+
     ctx = modules.selector.run(ctx)    # ★ 数值 vs 智能 选优
     ctx = modules.assess.run(ctx)      # ③ 国标判级
 

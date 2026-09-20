@@ -248,6 +248,32 @@ def run(ctx: ModuleContext) -> ModuleContext:
         tag = _tag(ctx)
         OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+        # ===== 先判定：这一问该用「课题三的成品图」还是「自己画」 =====
+        #   站点 / 全场·大范围（跨度 >4°）→ 用他们出好的业务图（权威、平滑）；
+        #   局地（闽南、厦门沿海…，跨度 ≤4° 或模式点取景）→ 他们没局地数据，自己画。
+        _g0 = ctx.results.get("geo_stats") or {}
+        _b0 = _g0.get("field_box") or ctx.request.get("field_box") or []
+        _span0 = (max(_b0[1] - _b0[0], _b0[3] - _b0[2])
+                  if len(_b0) == 4 else 0.0)
+        _field0 = bool(_g0.get("field_query") or ctx.request.get("field_query"))
+        _local0 = bool(_g0.get("point_grid")) or (_field0 and _span0 <= 4)
+        _station0 = bool(_g0.get("sites")) or bool(ctx.request.get("station"))
+        _plot_ok = plot in ("", "all", "surge_field", "wave_field", "field",
+                            "distribution", "surge_station", "wave", "wind_wave")
+        # 官方成品图是「成品」，用户明确要别的图（风场/动图/双联图）时不抢
+        _official: list = []
+        print(f"[visualize] 官方成品图判定: plot={plot!r} field={_field0} box={_b0} "
+              f"span={_span0} local={_local0} station={_station0} plot_ok={_plot_ok}")
+        if _plot_ok and not _local0 and (_span0 > 4 or _field0 or _station0):
+            try:
+                from . import viz_extra
+                _official = list(viz_extra.attach_official_products(ctx) or [])
+                print(f"[visualize] 采用课题三成品图 {len(_official)} 张: "
+                      f"{[Path(str(x)).name for x in _official]}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[visualize] 取官方成品图失败，改自绘: {e}")
+                _official = []
+
         def want(kind: str) -> bool:
             """是否需要某类图。
 
@@ -270,13 +296,14 @@ def run(ctx: ModuleContext) -> ModuleContext:
         # 不要抢着画区域增水分布图——「问什么画什么」。
         field_ok = (not plot) or (plot in ("all", "surge_field", "wave_field",
                                            "wave", "field", "distribution"))
-        if field_ok and (ctx.request.get("field_query") or ctx.results.get("ai_field")):
+        if (field_ok and not _official
+                and (ctx.request.get("field_query") or ctx.results.get("ai_field"))):
             fp = _draw_ai_field(OUT_DIR, ctx, tag)
             if fp:
                 images.append(str(fp))
 
-        # ===== 海浪波高曲线 =====
-        if want("wave"):
+        # ===== 海浪波高曲线（已有官方成品图就不重复画） =====
+        if want("wave") and not _official:
             geo_w = ctx.results.get("geo_stats", {}) or {}
             wsite = [s for s in (geo_w.get("sites") or []) if s.get("series_wave_m")]
             ws = ctx.results.get("wave_stats", {}) or {}
@@ -309,8 +336,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 plt.close(fig)
                 images.append(str(path))
 
-        # ===== 站点增水/水位过程曲线 =====
-        if want("surge_station"):
+        # ===== 站点增水/水位过程曲线（已有官方成品图就不重复画） =====
+        if want("surge_station") and not _official:
             geo = ctx.results.get("geo_stats", {}) or {}
             sites = geo.get("sites") or []
             if sites:
@@ -347,7 +374,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
             except Exception as e:  # noqa: BLE001
                 _fail(ctx, "动图", e)
 
-        # ===== 课题三自己出的成品图（直接取用官方版本） =====
+        # ===== 课题三自己出的成品图（前面已判定并取回） =====
+        if _official:
+            images.extend(_official)
+
         if plot in ("product", "official", "官方图", "他们的图", "成品图",
                     "anim", "官方动图"):
             try:

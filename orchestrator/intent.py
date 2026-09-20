@@ -82,7 +82,12 @@ def _match_region(text: str) -> Tuple[str, str]:
     for name, full in REGION_DICT.items():
         if name in text:
             return full, name
-    # 再按完整地名字典匹配（覆盖区内的任意沿海地名）
+    # 再按大范围区域名匹配（全场、全域、闽南、闽东、台湾海峡…）——最长优先
+    # 这些名字在 REGION_BOXES 里，可直接换算成经纬度框出场分布图
+    for name in sorted(geo_domain.REGION_BOXES.keys(), key=len, reverse=True):
+        if name and name in text:
+            return name, ""
+    # 最后按完整地名字典匹配（覆盖区内的任意沿海地名）
     name, _coord = geo_domain.locate(text)
     if name:
         return name, name

@@ -289,7 +289,8 @@ def draw_wind_wave_gif(OUT_DIR: Path, ctx, tag: str, *, max_frames: int = 40,
 # --------------------------------------------------------------------------- #
 # ②' 直接取用课题三自己出的**成品图**（官方版本）
 # --------------------------------------------------------------------------- #
-def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False) -> List[str]:
+def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
+                             mode: str = "auto") -> List[str]:
     """取课题三自己出的成品图，供对话直接展示（不必自己重画）。
 
     - 默认：0.01° 的最大增水场图 + 该站的 0.01° 站点时序图（平滑、权威）
@@ -316,20 +317,71 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False)
     except Exception:
         pass
 
+    # ===== 判定一：局地取景（闽南、厦门沿海…）一律自己画，不用他们的成品图 =====
+    #   他们的成品图分辨率/范围是全场或福建中南部，没有局地细节。
+    _geo = ctx.results.get("geo_stats") or {}
+    _box = _geo.get("field_box") or ctx.request.get("field_box") or []
+    _span = (max(_box[1] - _box[0], _box[3] - _box[2])
+             if len(_box) == 4 else 99.0)          # 99 = 不知道范围，按大范围处理
+    _is_field = bool(_geo.get("field_query") or ctx.request.get("field_query"))
+    _local = bool(_geo.get("point_grid")) or (_is_field and _span <= 4)
+    if _local:
+        ctx.results["official_products"] = []
+        return []
+
+    # ===== 判定二：要浪的成品图，还是要增水的成品图 =====
+    _dis = str(ctx.request.get("disaster", "") or "")
+    _plt = str(ctx.request.get("plot", "") or "").strip().lower()
+    _wave = ("wave" in _dis.lower()) or ("浪" in _dis) or _plt in ("wave", "wave_field",
+                                                                 "wave_station", "wind_wave")
+    _buoy = str(ctx.request.get("buoy_code", "") or "").strip().upper()
+    _station = (bool(_geo.get("sites")) or bool(ctx.request.get("station"))
+                or _plt == "surge_station")
+    if mode in ("station", "field"):
+        _station = (mode == "station")
+
+    def _first(kinds, c):
+        for k in kinds:
+            p = ai_daily.fetch_product(k, code=c, date=d8)
+            if p:
+                return p
+        return None
+
+    # 大范围（跨度 >4°，如"全场"）优先按"场"给图；
+    # 注意：场查询的 geo_stats 里通常也带站点，不能因此被误判成"纯站点问法"
+    #   注意 _span 在"没有框"时是 99（那是给"是否算局地"用的），
+    #   所以这里必须要求**确实有框**，否则纯站点提问会被误判成大范围。
+    _broad = (_is_field or len(_box) == 4) and _span > 4
+
     got: List[Dict[str, Any]] = []
-    for kind in ("field_max", "timeseries"):
-        p = ai_daily.fetch_product(kind, code=code, date=d8)
-        if p:
-            got.append(p)
-    if not got:
-        for kind in ("field_max_1", "curve_1"):
-            p = ai_daily.fetch_product(kind, code=code, date=d8)
+    if _wave:
+        # 海浪：他们出的是「浮标单点图」和「风+浪双面板动图」（动图 10~16 MB，只在场查询时取）
+        if _buoy:
+            p = _first(("buoy_viz",), _buoy)
             if p:
                 got.append(p)
+        if not got and (_broad or not _station):
+            p = _first(("wave_double",), code)
+            if p:
+                got.append(p)
+    elif _station and not _broad:
+        # 站点：他们的 0.01° 站点时序图（缺则回退 0.25° 全场曲线图）
+        p = _first(("timeseries", "curve_1"), code)
+        if p:
+            got.append(p)
+    else:
+        # 全场 / 大范围：他们的最大增水场图 + 该站时序图
+        p = _first(("field_max", "field_max_1"), code)
+        if p:
+            got.append(p)
+        p = _first(("timeseries", "curve_1"), code)
+        if p:
+            got.append(p)
+
     if want_anim:
         p = (ai_daily.fetch_product("wind_surge", code=code, date=d8)
              or ai_daily.fetch_product("anim", code=code, date=d8))
-        if p:
+        if p and p.get("path") not in [g.get("path") for g in got]:
             got.append(p)
 
     ctx.results["official_products"] = got

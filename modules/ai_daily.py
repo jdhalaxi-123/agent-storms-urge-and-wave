@@ -838,6 +838,24 @@ PROD1 = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"
 STATION_CN_FULL = {"XMN": "厦门", "CWU": "崇武", "JNJ": "晋江", "DSN": "东山"}
 
 
+def _prod_newest_deep(dirpath: str, pattern: str, depth: int = 2):
+    """先在本目录找，找不到再往子目录钻 depth 层（成品图常在 gifs_output/ 这类子目录里）。"""
+    b = _prod_newest(dirpath, pattern)
+    if b:
+        return b
+    if depth <= 0:
+        return None
+    try:
+        subs = [e for e in _ls(dirpath) if e["dir"]]
+    except Exception:  # noqa: BLE001
+        return None
+    for e in subs:
+        b = _prod_newest_deep(e["path"], pattern, depth - 1)
+        if b:
+            return b
+    return None
+
+
 def _prod_newest(dirpath: str, pattern: str):
     """目录里日期最大的匹配文件 → (日期, entry)。"""
     pat = re.compile(pattern)
@@ -867,6 +885,28 @@ def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict
     """
     code = str(code or "XMN").upper()
     cn = STATION_CN_FULL.get(code, "厦门")
+
+    if kind == "wave_double":      # 风+浪双面板动图（AutoWave/gifs_output/，前缀 ATM<日期>_）
+        b = _prod_newest_deep(f"{DF}/AutoWave",
+                              r"ATM(\d{8})_wind_wave_forecast_cartopy\.gif")
+        if not b:
+            return None
+        d, e = b
+        lp = fc.fetch(e["path"], expected_size=e["size"])
+        return ({"path": lp, "date": d, "kind": kind, "file": e["name"],
+                 "size_mb": round(e["size"] / 1e6, 2), "grid": "风+浪双面板动图"}
+                if lp else None)
+
+    if kind in ("buoy_viz",):
+        pat = rf"ATM_point_wave_{code}_viz_(\d{{8}})\.png"
+        b = _prod_newest_deep(f"{DF}/wave_for_single_point", pat, depth=3)
+        if not b:
+            return None
+        d, e = b
+        lp = fc.fetch(e["path"], expected_size=e["size"])
+        return ({"path": lp, "date": d, "kind": kind, "file": e["name"],
+                 "size_mb": round(e["size"] / 1e6, 2), "grid": "浮标单点（课题三成品图）"}
+                if lp else None)
 
     if kind in ("field_max", "timeseries", "anim"):
         pat = {"field_max": r"surge_max_(\d{8})\.png",
