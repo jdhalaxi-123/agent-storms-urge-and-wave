@@ -426,7 +426,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
     try:
         _notes = ctx.results.setdefault("image_notes", {})
         _SELF = [
-            ("wind_wave_anim", "本系统自绘 · 风场动图（风速填色+风向箭头，**不含海浪面板**）"),
+            ("wind_field_anim", "本系统自绘 · **风场**动图（风速填色+风向箭头，不含海浪面板）"),
+            ("wind_wave_anim", "本系统自绘 · **风场**动图（旧命名，实为风场，不含海浪面板）"),
             ("wind_wave_pair", "本系统自绘 · 风与浪并排静态双联图"),
             ("wind_field", "本系统自绘 · 风场图（风速填色+风向箭头）"),
             ("field_ai_surge", "本系统自绘 · 风暴增水场空间分布图"),

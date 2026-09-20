@@ -281,7 +281,9 @@ def draw_wind_wave_gif(OUT_DIR: Path, ctx, tag: str, *, max_frames: int = 40,
         buf.seek(0)
         frames.append(Image.open(buf).convert("RGB"))
 
-    out = OUT_DIR / f"wind_wave_anim_{tag}.gif"
+    # 名字要如实：这张图画的是**风场**（不是风+浪双面板），
+    # 名字里带 wind_wave 会让模型照着说错，所以叫 wind_field_anim
+    out = OUT_DIR / f"wind_field_anim_{tag}.gif"
     p = plotstyle.make_gif(frames, out, duration=0.4)
     return [p] if p else []
 

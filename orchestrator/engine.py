@@ -80,6 +80,7 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                     return {
                         "reply": ctx.results.get("brief", {}).get("markdown", ""),
                         "images": ctx.results.get("visualize", {}).get("images", []),
+                        "image_notes": ctx.results.get("image_notes") or {},
                         "docx_path": ctx.results.get("brief", {}).get("docx_path"),
                         "brief_template": ctx.results.get("brief", {}).get("template"),
                         "field_query": True,
