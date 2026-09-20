@@ -347,6 +347,12 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
         "field_max": "课题三成品图 · 0.01° 最大增水场图（福建中南部，非单站）",
         "field_max_1": "课题三成品图 · 0.25° 全场最大增水场图（非单站）",
         "station_fig": "课题三成品图 · **站点预报系统**单站风暴潮过程曲线（单站）",
+        "ec_field_max": "课题三成品图 · **EC(ECMWF) 强迫** 0.01° 最大增水场图（福建中南部）",
+        "ec_timeseries": "课题三成品图 · **EC(ECMWF) 强迫** 0.01° 站点增水时序图（单站）",
+        "ec_anim": "课题三成品动图 · **EC(ECMWF) 强迫** 0.01° 增水动图",
+        "ec_field_max_1": "课题三成品图 · **EC(ECMWF) 强迫** 0.25° 全场最大增水场图",
+        "ec_anim_1": "课题三成品动图 · **EC(ECMWF) 强迫** 0.25° 全场增水动图",
+        "ec_wind_surge": "课题三成品动图 · **EC(ECMWF) 强迫** 0.25° 风+增水联合动图",
         "timeseries": "课题三成品图 · 0.01° 站点增水时序图（单站，时空模型）",
         "curve_1": "课题三成品图 · 0.25° 站点增水曲线图（单站）",
         "wave_double": "课题三成品动图 · **全场预报** 风+浪双面板动图",
@@ -386,7 +392,25 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
     _broad = (_is_field or len(_box) == 4) and _span > 4
 
     got: List[Dict[str, Any]] = []
-    if _wave:
+    if _want_ec and not _wave:
+        # ===== 增水（风暴潮）+ 点名 EC：给 EC 强迫那一套 =====
+        #   0.01°：EC 最大增水场图 / EC 站点时序图 / EC 增水动图
+        if _want_anim:
+            p = _first(("ec_anim", "ec_wind_surge", "ec_anim_1"), code)
+            if p:
+                got.append(p)
+        elif _station and not _broad:
+            p = _first(("ec_timeseries",), code)
+            if p:
+                got.append(p)
+        else:
+            p = _first(("ec_field_max", "ec_field_max_1"), code)
+            if p:
+                got.append(p)
+            p = _first(("ec_timeseries",), code)
+            if p:
+                got.append(p)
+    elif _wave:
         # 海浪：他们出的是「浮标单点图」和「风+浪双面板动图」（动图 10~16 MB，只在场查询时取）
         if _buoy:
             p = _first(("buoy_viz",), _buoy)
@@ -410,8 +434,12 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
         p = _first(("field_max", "field_max_1"), code)
         if p:
             got.append(p)
+    elif _broad:
+        # 全场/大范围风暴潮：**不附**他们那张 0.01° 福建中南部静态场图（范围对不上），
+        # 交给本系统用当次最新的 0.25° 全场 AI 场**自绘**全场增水场分布图。
+        print("[viz_extra] 全场风暴潮：按用户口径改用当次数据自绘全场场图")
     else:
-        # 全场 / 大范围：他们的最大增水场图 + 该站时序图
+        # 其他情况（既不是站点、也不是大范围）：他们的最大增水场图 + 站点时序图
         p = _first(("field_max", "field_max_1"), code)
         if p:
             got.append(p)
@@ -440,8 +468,9 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
                 except ValueError:
                     _gd = None
                 # 明确点名 EC 的那张：即便旧也照给（note 里注明新旧差）
+                _k = str(g.get("kind") or "")
                 if _gd and abs((_r - _gd).days) > 3:
-                    if _want_ec and str(g.get("kind")) == "wave_double_ec":
+                    if _want_ec and (_k == "wave_double_ec" or _k.startswith("ec_")):
                         _stale_kept[str(g.get("path") or "")] = abs((_r - _gd).days)
                     else:
                         _skip.append(g)

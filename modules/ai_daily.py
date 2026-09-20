@@ -34,7 +34,12 @@ import numpy as np
 from orchestrator import ftp_catalog as fc
 
 # 各数据源路径
-DF = "/group3/ATM_new/dailyforecast"
+# ⭐ 对方有**两套镜像**目录，谁的数据新就用谁（早前旧路径 550，改成固定 ATM_new；
+#    2026-09-20 实测两条都在，且只有旧路径有当天数据）→ 见 refresh_df()
+DF_CANDIDATES = ("/group3/dailyforecast", "/group3/ATM_new/dailyforecast")
+DF = DF_CANDIDATES[1]
+_df_checked_at = 0.0
+_df_ttl_sec = 300.0
 SURGE_FIELD_DIR = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"      # atm_forecast_YYYYMMDD/
 STATION_FIG_DIR = f"{DF}/storm_surge_point_system/figures"     # <站点>_<起>_<止>.tif（站点预报系统）
 WAVE_FIELD_DIR = f"{DF}/AutoWave/res_ATM"                                   # YYYYMMDD_wave_forecast_1h.nc
@@ -44,6 +49,93 @@ TIDE_DIR = f"{TOTAL_WATER_DIR}/tide"                                        # �
 STATION_FIELD_DIR = f"{TOTAL_WATER_DIR}/stations_nc"                        # total_water_level_field_站_*.nc
 POINT_SURGE_DIR = f"{DF}/storm_surge_point_system/nc_file"
 POINT_WAVE_DIR = f"{DF}/wave_for_single_point/outputs/nc_file"
+
+
+def _df_latest_date(root: str) -> str:
+    """该 root 下"最新一期"的日期（用 0.01° 最大增水场图的文件名日期代表）。"""
+    try:
+        es = _ls(f"{root}/storm_surge_for_spatiotemporal_2/results_atm")
+    except Exception:  # noqa: BLE001
+        return ""
+    best = ""
+    for e in es:
+        if e["dir"]:
+            continue
+        m = re.search(r"surge_max_(\d{8})\.png$", e["name"])
+        if m and m.group(1) > best:
+            best = m.group(1)
+    return best
+
+
+def _ec_latest_date(root: str) -> str:
+    """该 root 下 EC 强迫结果的最新期。"""
+    try:
+        es = _ls(f"{root}/storm_surge_for_spatiotemporal_2/results_ec")
+    except Exception:  # noqa: BLE001
+        return ""
+    best = ""
+    for e in es:
+        if e["dir"]:
+            continue
+        m = re.search(r"surge_max_(\d{8})\.png$", e["name"])
+        if m and m.group(1) > best:
+            best = m.group(1)
+    return best
+
+
+def best_ec_root(force: bool = False) -> str:
+    """EC 强迫那套要**单独挑**：两套镜像的 EC 更新进度不一样
+    （2026-09-20 实测：活跃路径的 EC 只到 20260624，另一条到 20260817）。"""
+    key = "ec_root"
+    now = time.time()
+    if not force and key in _mem and now - _mem[key]["t"] < 600:
+        return _mem[key]["v"]
+    best_root, best_date = DF, ""
+    for root in DF_CANDIDATES:
+        d = _ec_latest_date(root)
+        if d > best_date:
+            best_root, best_date = root, d
+    print(f"[ai_daily] EC 数据取：{best_root}（最新期 {best_date or '无'}）")
+    _mem[key] = {"t": now, "v": best_root}
+    return best_root
+
+
+def refresh_df(force: bool = False, ttl: float = None) -> str:
+    """在两套镜像里挑**数据最新**的那条作为数据根目录（带 TTL，避免每条查询都探）。"""
+    global DF, PROD2, PROD2_EC, PROD1, PROD1_EC, STATION_FIG_DIR, POINT_SURGE_DIR, \
+        POINT_WAVE_DIR, WAVE_FIELD_DIR, WAVE_FIELD_DIR_EC, SURGE_FIELD_DIR, \
+        TOTAL_WATER_DIR, TIDE_DIR, STATION_FIELD_DIR, FINE_SURGE_DIR, _df_checked_at
+    now = time.time()
+    if not force and (now - _df_checked_at) < (_df_ttl_sec if ttl is None else ttl):
+        return DF
+    best_root, best_date = DF, ""
+    info = []
+    for root in DF_CANDIDATES:
+        d = _df_latest_date(root)
+        info.append(f"{root} → {d or '不可用'}")
+        if d > best_date:
+            best_root, best_date = root, d
+    if best_root != DF:
+        print(f"[ai_daily] 切换数据根目录：{DF} → {best_root}（最新期 {best_date}）"
+              f"　[{'; '.join(info)}]")
+    DF = best_root
+    PROD2 = f"{DF}/storm_surge_for_spatiotemporal_2/results_atm"
+    PROD2_EC = f"{DF}/storm_surge_for_spatiotemporal_2/results_ec"
+    PROD1 = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"
+    PROD1_EC = f"{DF}/storm_surge_for_spatiotemporal_1/results_ec"
+    SURGE_FIELD_DIR = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"
+    STATION_FIG_DIR = f"{DF}/storm_surge_point_system/figures"
+    POINT_SURGE_DIR = f"{DF}/storm_surge_point_system/nc_file"
+    POINT_WAVE_DIR = f"{DF}/wave_for_single_point/outputs/nc_file"
+    WAVE_FIELD_DIR = f"{DF}/AutoWave/res_ATM"
+    WAVE_FIELD_DIR_EC = f"{DF}/AutoWave/res_EC"
+    TOTAL_WATER_DIR = f"{DF}/storm_surge_for_spatiotemporal_2/results_atm"
+    # ⭐ 这三个是导入时固定的别名，必须一起重建，否则 0.01° 精细场还指着旧镜像
+    TIDE_DIR = f"{TOTAL_WATER_DIR}/tide"
+    STATION_FIELD_DIR = f"{TOTAL_WATER_DIR}/stations_nc"
+    FINE_SURGE_DIR = TOTAL_WATER_DIR
+    _df_checked_at = now
+    return DF
 # 每日风场不在 dailyforecast 下，单独在 /group3/wind（约 260 MB/天，是 AI 风暴潮/海浪的驱动）
 WIND_DIR = "/group3/wind"                                                    # atm_forecast_YYYYMMDD.nc
 
@@ -834,8 +926,11 @@ def fine_field_stats(field: Dict[str, Any], box: Optional[tuple] = None) -> Dict
 #    _2 目录：基于 0.01° 旋转网格（福建中南部），平滑
 #    _1 目录：基于 0.25° 全场网格，方格明显（且台湾是白洞）
 # --------------------------------------------------------------------------- #
+# 下面这几个由 refresh_df() 统一重建（勿在别处硬编码路径）
 PROD2 = f"{DF}/storm_surge_for_spatiotemporal_2/results_atm"
+PROD2_EC = f"{DF}/storm_surge_for_spatiotemporal_2/results_ec"   # EC(ECMWF) 强迫，0.01°
 PROD1 = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"
+PROD1_EC = f"{DF}/storm_surge_for_spatiotemporal_1/results_ec"   # EC(ECMWF) 强迫，0.25° 全场
 STATION_CN_FULL = {"XMN": "厦门", "CWU": "崇武", "JNJ": "晋江", "DSN": "东山"}
 
 
@@ -938,6 +1033,39 @@ def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict
                 "grid": "站点预报系统 · 单站风暴潮过程曲线",
                 "converted_from": (e["name"] if png else "")}
 
+    # ===== EC（ECMWF）强迫那一套：只在用户点名 EC 时用 =====
+    if kind.startswith("ec_"):
+        _ecr = best_ec_root()
+        _ec2 = f"{_ecr}/storm_surge_for_spatiotemporal_2/results_ec"
+        _ec1 = f"{_ecr}/storm_surge_for_spatiotemporal_1/results_ec"
+        if kind == "ec_field_max":          # 0.01° 最大增水场图
+            b = _prod_newest(_ec2, r"surge_max_(\d{8})\.png")
+            grid = "EC 强迫 · 0.01° 最大增水场图（福建中南部）"
+        elif kind == "ec_timeseries":       # 0.01° 站点时序图
+            b = _prod_newest(_ec2, rf"surge_{code}_timeseries_(\d{{8}})\.png")
+            grid = "EC 强迫 · 0.01° 站点增水时序图（单站）"
+        elif kind == "ec_anim":             # 0.01° 增水动图
+            b = _prod_newest(_ec2, r"surge_animation_(\d{8})\.gif")
+            grid = "EC 强迫 · 0.01° 增水动图"
+        elif kind == "ec_field_max_1":      # 0.25° 全场最大增水场图
+            b = _prod_newest(_ec1, r"surge_max_(\d{8})\.png")
+            grid = "EC 强迫 · 0.25° 全场最大增水场图"
+        elif kind == "ec_anim_1":           # 0.25° 全场增水动图
+            b = _prod_newest(_ec1, r"surge_animation_(\d{8})\.gif")
+            grid = "EC 强迫 · 0.25° 全场增水动图"
+        elif kind == "ec_wind_surge":       # 0.25° 风+增水联合动图
+            b = _prod_newest(_ec1, r"wind_surge_combined_(\d{8})\.gif")
+            grid = "EC 强迫 · 0.25° 风+增水联合动图"
+        else:
+            return None
+        if not b:
+            return None
+        d, e = b
+        lp = fc.fetch(e["path"], expected_size=e["size"])
+        return ({"path": lp, "date": d, "kind": kind, "file": e["name"],
+                 "size_mb": round(e["size"] / 1e6, 2), "grid": grid}
+                if lp else None)
+
     if kind in ("wave_double", "wave_double_ec"):
         # 风+浪双面板动图（只有这两张是他们出的）：
         #   wave_double    ATM 起报 = 全场预报
@@ -956,7 +1084,10 @@ def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict
 
     if kind in ("buoy_viz",):
         pat = rf"ATM_point_wave_{code}_viz_(\d{{8}})\.png"
-        b = _prod_newest_deep(f"{DF}/wave_for_single_point", pat, depth=3)
+        # 图现在放在 wave_for_single_point/outputs/visualization/，nc 在 outputs/nc_file/
+        b = (_prod_newest_deep(f"{DF}/wave_for_single_point/outputs/visualization", pat,
+                               depth=2)
+             or _prod_newest_deep(f"{DF}/wave_for_single_point", pat, depth=3))
         if not b:
             return None
         d, e = b
@@ -1131,6 +1262,7 @@ def date_check(target_date: str, now: Optional[datetime.datetime] = None,
 
     target_date 支持 "今天"/"明天"/"昨天"/"2026-09-16"/"9月16日"/""（空=今天）
     """
+    refresh_df()          # 两套镜像里挑最新的一份（带 TTL）
     now = now or datetime.datetime.now()
     s = str(target_date or "").strip()
     d = None
@@ -1202,3 +1334,11 @@ if __name__ == "__main__":  # python -m modules.ai_daily
     t = load_tide_prediction("XMN")
     if t:
         print(f"  厦门 {t['date']}  {t['n']} 小时  {t['tide_m'][0]:.2f} ~ {max(t['tide_m']):.2f} m")
+
+
+# 导入时先选一次数据根目录（失败不影响启动，回退默认值）
+try:
+    _pick_done = True
+    refresh_df(force=True)
+except Exception as _e:  # noqa: BLE001
+    print(f"[ai_daily] 初始化数据根目录失败（沿用默认）: {_e}")
