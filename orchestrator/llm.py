@@ -470,6 +470,7 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
     messages.append({"role": "user", "content": str(message)})
 
     images: List[str] = []
+    docx_made: List[str] = []
     seen: Dict[Tuple[str, str], Tuple[Dict[str, Any], List[str]]] = {}
     for _round in range(MAX_TOOL_ROUNDS):
         resp = client.chat.completions.create(
@@ -509,6 +510,9 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
                 seen[key] = (result, new_images)
             if new_images:
                 images = new_images
+            _dx = (result or {}).get('docx_path')
+            if _dx:
+                docx_made.append(str(_dx))
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -517,4 +521,10 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
 
     # 轮数用尽：强制不带工具出最终文本，保证一定给用户一个回复
     resp = client.chat.completions.create(model=MODEL, messages=messages, timeout=120)
-    return resp.choices[0].message.content or "（未生成回复，请重试）", images
+    _final = resp.choices[0].message.content or "（未生成回复，请重试）"
+    if docx_made:      # 简报信息由程序追加，避免模型漏说
+        from pathlib import Path as _P
+        _last = _P(docx_made[-1])
+        _final += (f"\n\n📄 已生成正式简报：**{_last.name}**\n"
+                   f"（存放目录：{_last.parent}）")
+    return _final, images

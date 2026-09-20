@@ -99,10 +99,21 @@ def run(ctx: ModuleContext) -> ModuleContext:
     if data:
         markdown = brief_tpl.render_markdown(data)
         docx_path = None
+        # 优先按**官方简报版式**生成 Word（三行抬头/36pt 大标题/编号+签发/潮位表…）；
+        # 失败时回退到通用模板转换器，保证一定有一份 Word。
         try:
-            docx_path = str(brief_tpl.render_docx(data, OUT_DIR))
+            from . import brief_official
+            docx_path = str(brief_official.render(data, OUT_DIR))
+        except Exception as e:  # noqa: BLE001
+            print(f"[brief] 官方版式 Word 生成失败（改用通用模板）：{e}")
+            try:
+                docx_path = str(brief_tpl.render_docx(data, OUT_DIR))
+            except Exception:
+                docx_path = None  # Word 生成失败不影响对话
+        try:      # 标记最近简报，供 UI 追加可点链接
+            (OUT_DIR / ".last_brief").write_text(str(docx_path or ""), encoding="utf-8")
         except Exception:
-            docx_path = None  # Word 生成失败不影响对话
+            pass
         ctx.results["brief"] = {
             "markdown": markdown,
             "docx_path": docx_path,

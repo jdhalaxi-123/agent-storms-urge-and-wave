@@ -79,6 +79,23 @@ def _check_plot_deps() -> None:
 _check_plot_deps()
 
 
+
+def _append_brief_line(text: str) -> str:
+    """把最近生成的简报以可点链接形式追加到回复（不经模型转述）。"""
+    import time
+    from pathlib import Path as _P
+    from orchestrator import paths as _paths
+    f = _paths.BRIEFS_DIR / ".last_brief"
+    try:
+        p = _P(f.read_text(encoding="utf-8").strip())
+    except Exception:
+        return text
+    if not p.exists() or (time.time() - p.stat().st_mtime) > 300:
+        return text                      # 不是本轮生成的，不追加
+    return (text + f"\n\n📄 本次正式简报：[{p.name}]"
+            f"(/gradio_api/file={p.as_posix()})　点击打开")
+
+
 def _file_msg(img_path: str) -> dict:
     """图片消息：gr.Image 组件嵌入（ComponentMessage），聊天流内显示；
     点击由注入的 LIGHTBOX JS 拦截 -> 全屏大图模态框。"""
@@ -145,6 +162,9 @@ def _respond(text, audio_path, history):
         memory.append_chat(text, bot_text, {"images": len(images or [])})
     except Exception:
         pass
+    bot_text = _append_brief_line(bot_text)
+    if images or True:
+        new_history = history + [[text, (bot_text, images or [])]]
     yield _to_messages(new_history), gr.skip(), gr.skip(), new_history
 
 
@@ -446,7 +466,10 @@ if __name__ == "__main__":
     try:
         # prevent_thread_lock=True: launch 立即返回（不阻塞），服务在后台线程运行；
         # 健康检查失败(沙箱网络)不影响已监听的端口
-        demo.launch(server_name=HOST, server_port=PORT,
+        demo.launch(
+        allowed_paths=[str(paths.BRIEFS_DIR), str(paths.FIGURES_DIR),
+                       str(paths.DATA_ROOT)],   # 允许通过 /gradio_api/file= 打开生成的简报与图片
+        server_name=HOST, server_port=PORT,
                     prevent_thread_lock=True, quiet=True, show_error=False)
     except Exception as e:  # noqa: BLE001
         # 即便 launch 因健康检查抛错，服务可能已起来；保活进程

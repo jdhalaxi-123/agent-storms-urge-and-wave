@@ -21,6 +21,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows 控制台默认 GBK，打印 ✅/❌ 会 UnicodeEncodeError（曾导致自检跑一半就崩）
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001
+    pass
+
 ROOT = Path(__file__).resolve().parents[1]
 OK, BAD, WARN = "✅", "❌", "⚠️"
 problems: list = []
