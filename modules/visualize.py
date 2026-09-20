@@ -297,7 +297,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
         # 注意：用户明确要别的图（如 wind 风场、surge_station 站点曲线）时，
         # 不要抢着画区域增水分布图——「问什么画什么」。
         field_ok = (not plot) or (plot in ("all", "surge_field", "wave_field",
-                                           "wave", "field", "distribution"))
+                                           "wave", "field", "distribution",
+                                           # 局地要动图但我们没有局地动图 → 给区域场图
+                                           "gif", "animation", "动图", "动画",
+                                           "wind_wave"))
         if (field_ok and not _official
                 and (ctx.request.get("field_query") or ctx.results.get("ai_field"))):
             fp = _draw_ai_field(OUT_DIR, ctx, tag)
@@ -309,8 +312,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
         #   · 「厦门海浪」「崇武的海浪」这类点名地点 → 画这条曲线（FTP 上没有对应成品图）
         #   · 「闽南的海浪场」这类要"场"的 → 只出自绘区域场图，不画曲线
         #   · 全场/浮标站号 → 用课题三成品（动图/单点图），不重复自绘
-        if (want("wave") and not _official
-                and not ctx.request.get("field_query")):
+        if ((want("wave") or plot in ("gif", "animation", "动图", "动画", "wind_wave"))
+                and not _official and not ctx.request.get("field_query")):
             geo_w = ctx.results.get("geo_stats", {}) or {}
             wsite = [s for s in (geo_w.get("sites") or []) if s.get("series_wave_m")]
             ws = ctx.results.get("wave_stats", {}) or {}

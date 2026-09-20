@@ -368,6 +368,12 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
     # 是否明确要动图（用户的"动图/动画"或调用方 want_anim）
     _want_anim = (want_anim or bool(ctx.request.get("want_anim"))
                   or _plt in ("gif", "animation", "动图", "动画"))
+    # 是否**明确点名 EC**（他们的动图只有两张：全场预报 + EC 预报；
+    # 点名 EC 时要的就是那一版，即使产品比当前数据旧也照给，但必须注明日期）
+    _raw_all = str(ctx.request.get("raw", "") or "").lower()
+    _want_ec = (str(ctx.request.get("wave_source", "") or "").lower() == "ec"
+                or any(k in _raw_all for k in ("ecmwf", "欧洲中心", "ec预报",
+                                               "ec 预报", "ec的", "ec 的")))
 
     # 大范围（跨度 >4°，如"全场"）优先按"场"给图；
     # 注意：场查询的 geo_stats 里通常也带站点，不能因此被误判成"纯站点问法"
@@ -384,10 +390,6 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
                 got.append(p)
         if not got and (_broad or not _station):
             # 他们的动图只有两张：全场预报(ATM) 与 EC 预报——按用户说法选
-            _raw_l = str(ctx.request.get("raw", "") or "").lower()
-            _want_ec = (str(ctx.request.get("wave_source", "") or "").lower() == "ec"
-                        or any(k in _raw_l for k in ("ecmwf", "欧洲中心", "ec预报",
-                                                     "ec 预报", "ec的", "ec 的")))
             p = _first(("wave_double_ec" if _want_ec else "wave_double",), code)
             if p:
                 got.append(p)
@@ -425,15 +427,19 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
         except ValueError:
             _r = None
         if _r:
-            _keep, _skip = [], []
+            _keep, _skip, _stale_kept = [], [], {}
             for g in got:
                 _d = str(g.get("date") or "")
                 try:
                     _gd = _dt.datetime.strptime(_d, "%Y%m%d")
                 except ValueError:
                     _gd = None
+                # 明确点名 EC 的那张：即便旧也照给（note 里注明新旧差）
                 if _gd and abs((_r - _gd).days) > 3:
-                    _skip.append(g)
+                    if _want_ec and str(g.get("kind")) == "wave_double_ec":
+                        _stale_kept[str(g.get("path") or "")] = abs((_r - _gd).days)
+                    else:
+                        _skip.append(g)
                 else:
                     _keep.append(g)
             if _skip:
@@ -448,6 +454,12 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
     for g in got:
         if g.get("path"):
             _notes[str(g["path"])] = _note(g)
+    # 点名要的陈旧产品：note 里写清楚，避免模型"给了图却说没给"
+    for _p, _days in locals().get("_stale_kept", {}).items():
+        if _p and _p in _notes:
+            _notes[_p] = (_notes[_p]
+                          + f"；**用户明确要这一版，故照给**，比当前数据旧 {_days} 天，"
+                            "引用时务必注明该产品日期，且不要当成最新数据")
     ctx.results["image_notes"] = _notes
     return [g["path"] for g in got if g.get("path")]
 
