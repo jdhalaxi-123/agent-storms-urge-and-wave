@@ -36,6 +36,7 @@ from orchestrator import ftp_catalog as fc
 # 各数据源路径
 DF = "/group3/ATM_new/dailyforecast"
 SURGE_FIELD_DIR = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"      # atm_forecast_YYYYMMDD/
+STATION_FIG_DIR = f"{DF}/storm_surge_point_system/figures"     # <站点>_<起>_<止>.tif（站点预报系统）
 WAVE_FIELD_DIR = f"{DF}/AutoWave/res_ATM"                                   # YYYYMMDD_wave_forecast_1h.nc
 WAVE_FIELD_DIR_EC = f"{DF}/AutoWave/res_EC"
 TOTAL_WATER_DIR = f"{DF}/storm_surge_for_spatiotemporal_2/results_atm"      # rotated_total_water_level_*.nc
@@ -872,6 +873,24 @@ def _prod_newest(dirpath: str, pattern: str):
     return best
 
 
+def _tif_to_png(tif_path: str) -> Optional[str]:
+    """TIFF → PNG（浏览器不能直接显示 TIFF）。
+
+    只生成**显示用副本**，原图原封不动、内容不重绘；文件名加 _view 以示区分。
+    """
+    try:
+        from PIL import Image
+        dst = os.path.splitext(tif_path)[0] + "_view.png"
+        im = Image.open(tif_path)
+        if getattr(im, "n_frames", 1) > 1:
+            im.seek(0)
+        im.convert("RGB").save(dst)
+        return dst
+    except Exception as ex:  # noqa: BLE001
+        print(f"[ai_daily] TIFF 转 PNG 失败: {ex}")
+        return None
+
+
 def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict[str, Any]]:
     """取回课题三的成品图，返回 {path,date,kind,file,grid,size_mb}。
 
@@ -892,6 +911,32 @@ def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict
     #    已按用户指认停用，避免"乱挪用结果"。
     if kind in ("anim", "wind_surge"):
         return None
+
+    if kind == "station_fig":
+        # 站点预报系统的**单站成品图**（用户指认：这才是 group3 每天更新的单点图）
+        #   <CODE>_<起报日>_<结束时>.tif
+        _pat = re.compile(rf"{code}_(\d{{8}})_\d{{8}}\.tif$")
+        b = None
+        try:
+            for e in _ls(STATION_FIG_DIR):
+                if e["dir"]:
+                    continue
+                m = _pat.match(e["name"])
+                if m and (b is None or m.group(1) > b[0]):
+                    b = (m.group(1), e)
+        except Exception:  # noqa: BLE001
+            b = None
+        if not b:
+            return None
+        d, e = b
+        lp = fc.fetch(e["path"], expected_size=e["size"])
+        if not lp:
+            return None
+        png = _tif_to_png(lp)                      # 浏览器不能显示 TIFF
+        return {"path": png or lp, "date": d, "kind": kind, "file": e["name"],
+                "size_mb": round(e["size"] / 1e6, 2),
+                "grid": "站点预报系统 · 单站风暴潮过程曲线",
+                "converted_from": (e["name"] if png else "")}
 
     if kind in ("wave_double", "wave_double_ec"):
         # 风+浪双面板动图（只有这两张是他们出的）：

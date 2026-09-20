@@ -346,7 +346,8 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
     _NOTES = {
         "field_max": "课题三成品图 · 0.01° 最大增水场图（福建中南部，非单站）",
         "field_max_1": "课题三成品图 · 0.25° 全场最大增水场图（非单站）",
-        "timeseries": "课题三成品图 · 0.01° 站点增水时序图（单站）",
+        "station_fig": "课题三成品图 · **站点预报系统**单站风暴潮过程曲线（单站）",
+        "timeseries": "课题三成品图 · 0.01° 站点增水时序图（单站，时空模型）",
         "curve_1": "课题三成品图 · 0.25° 站点增水曲线图（单站）",
         "wave_double": "课题三成品动图 · **全场预报** 风+浪双面板动图",
         "wave_double_ec": "课题三成品动图 · **EC 预报** 风+浪双面板动图",
@@ -356,7 +357,10 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
     def _note(p):
         _t = _NOTES.get(str((p or {}).get("kind") or ""), "课题三成品图")
         _d = str((p or {}).get("date") or "")
-        return f"{_t}（产品日期 {_d}）" if _d else _t
+        _s = f"{_t}（产品日期 {_d}）" if _d else _t
+        if (p or {}).get("converted_from"):
+            _s += "；原图是 TIFF，系统只转了一份 PNG 供浏览器显示，图本身没有重绘"
+        return _s
 
     def _first(kinds, c):
         for k in kinds:
@@ -394,9 +398,10 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
             if p:
                 got.append(p)
     elif _station and not _broad:
-        # 站点：**他们只有单站静态过程曲线，压根没有"单站动图"**。
-        # 要动图也一样只给这张静态曲线——绝不拿场动图去顶（用户明确要求"没有就不要乱编"）。
-        p = _first(("timeseries", "curve_1"), code)
+        # 站点：用**站点预报系统**的单站成品图（用户指认的那张，四个站统一）；
+        # 取不到才退到时空模型的站点时序图。
+        # 他们没有"单站动图"，要动图也只给这张静态曲线——绝不拿场动图去顶。
+        p = _first(("station_fig", "timeseries", "curve_1"), code)
         if p:
             got.append(p)
     elif _want_anim:
