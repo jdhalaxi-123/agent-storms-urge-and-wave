@@ -886,15 +886,27 @@ def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict
     code = str(code or "XMN").upper()
     cn = STATION_CN_FULL.get(code, "厦门")
 
-    if kind == "wave_double":      # 风+浪双面板动图（AutoWave/gifs_output/，前缀 ATM<日期>_）
+    # ⭐ 对方（课题三）**只有两张成品动图**：AutoWave/gifs_output 里
+    #    ATM*(全场预报) 与 EC*(EC 预报) 的风+浪双面板。
+    #    spatiotemporal 目录下的 surge_animation*/wind_surge_double* **不是他们的成品**，
+    #    已按用户指认停用，避免"乱挪用结果"。
+    if kind in ("anim", "wind_surge"):
+        return None
+
+    if kind in ("wave_double", "wave_double_ec"):
+        # 风+浪双面板动图（只有这两张是他们出的）：
+        #   wave_double    ATM 起报 = 全场预报
+        #   wave_double_ec EC  起报 = EC 预报
+        _pre, _grid = (("ATM", "全场预报 · 风+浪双面板动图") if kind == "wave_double"
+                       else ("EC", "EC 预报 · 风+浪双面板动图"))
         b = _prod_newest_deep(f"{DF}/AutoWave",
-                              r"ATM(\d{8})_wind_wave_forecast_cartopy\.gif")
+                              rf"{_pre}(\d{{8}})_wind_wave_forecast_cartopy\.gif")
         if not b:
             return None
         d, e = b
         lp = fc.fetch(e["path"], expected_size=e["size"])
         return ({"path": lp, "date": d, "kind": kind, "file": e["name"],
-                 "size_mb": round(e["size"] / 1e6, 2), "grid": "风+浪双面板动图"}
+                 "size_mb": round(e["size"] / 1e6, 2), "grid": _grid}
                 if lp else None)
 
     if kind in ("buoy_viz",):

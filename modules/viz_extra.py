@@ -348,9 +348,8 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
         "field_max_1": "课题三成品图 · 0.25° 全场最大增水场图（非单站）",
         "timeseries": "课题三成品图 · 0.01° 站点增水时序图（单站）",
         "curve_1": "课题三成品图 · 0.25° 站点增水曲线图（单站）",
-        "anim": "课题三成品动图 · 0.01° 福建中南部增水场动图（覆盖该海域，**非单站动图**）",
-        "wind_surge": "课题三成品动图 · 0.25° 全场 风+增水双面板动图（色标固定）",
-        "wave_double": "课题三成品动图 · 全场 风+浪双面板动图",
+        "wave_double": "课题三成品动图 · **全场预报** 风+浪双面板动图",
+        "wave_double_ec": "课题三成品动图 · **EC 预报** 风+浪双面板动图",
         "buoy_viz": "课题三成品图 · 浮标单点海浪图（单点）",
     }
 
@@ -382,7 +381,12 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
             if p:
                 got.append(p)
         if not got and (_broad or not _station):
-            p = _first(("wave_double",), code)
+            # 他们的动图只有两张：全场预报(ATM) 与 EC 预报——按用户说法选
+            _raw_l = str(ctx.request.get("raw", "") or "").lower()
+            _want_ec = (str(ctx.request.get("wave_source", "") or "").lower() == "ec"
+                        or any(k in _raw_l for k in ("ecmwf", "欧洲中心", "ec预报",
+                                                     "ec 预报", "ec的", "ec 的")))
+            p = _first(("wave_double_ec" if _want_ec else "wave_double",), code)
             if p:
                 got.append(p)
     elif _station and not _broad:
@@ -392,8 +396,9 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
         if p:
             got.append(p)
     elif _want_anim:
-        # 全场/大范围 + 要动图：优先"风+增水双面板"（全场 0.25°），退而取 0.01° 增水动图
-        p = _first(("wind_surge", "anim"), code)
+        # 全场/大范围 + 要动图：他们**没有增水动图**（只有两张风+浪动图），
+        # 因此退回他们的**静态**最大增水场图，并如实说明"没有增水动图"。
+        p = _first(("field_max", "field_max_1"), code)
         if p:
             got.append(p)
     else:

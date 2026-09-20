@@ -24,6 +24,22 @@ def run(request: str) -> Dict[str, Any]:
 
 def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     """槽位入口：LLM 工具调用直接给结构化参数。"""
+    # ⭐「EC 预报 / 欧洲中心 / ECMWF」不是地名：指的是 EC 起报的那版预报。
+    #    统一按"全场"处理并标记取 EC 那张动图；否则会被当成不认识的地点，
+    #    退化成任意点采样(point_grid)→被判成"局地"→官方动图整条被跳过。
+    _raw_ec = str(raw or slots.get("raw", "") or "").lower()
+    if ("ecmwf" in _raw_ec or "欧洲中心" in _raw_ec or "ec预报" in _raw_ec
+            or "ec 预报" in _raw_ec or "ec的" in _raw_ec or "ec 的" in _raw_ec):
+        slots["wave_source"] = "ec"
+        _reg = str(slots.get("region") or "")
+        if not geo_domain.locate(_reg)[0] and not geo_domain.region_box(_reg):
+            slots["region"] = "全场"
+            slots["field_query"] = True
+            slots["field_box"] = [114.5, 127.5, 17.0, 29.5]
+            slots["broad_region"] = "全场"
+            slots.pop("point", None)
+            slots.pop("point_name", None)
+
     # 覆盖范围校验：超出范围不展示任何数据，只返回文字说明
     region = slots.get("region", "")
     # ⭐ 海浪单点的**浮标站号**（C6W10 / 46694A …）不是地名，别当坐标解析后误判出界
