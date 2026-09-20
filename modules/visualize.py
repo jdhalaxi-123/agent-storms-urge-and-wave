@@ -258,8 +258,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
         _field0 = bool(_g0.get("field_query") or ctx.request.get("field_query"))
         _local0 = bool(_g0.get("point_grid")) or (_field0 and _span0 <= 4)
         _station0 = bool(_g0.get("sites")) or bool(ctx.request.get("station"))
+        _anim = plot in ("gif", "animation", "动图", "动画")
         _plot_ok = plot in ("", "all", "surge_field", "wave_field", "field",
-                            "distribution", "surge_station", "wave", "wind_wave")
+                            "distribution", "surge_station", "wave", "wind_wave"
+                            ) or _anim
         # 官方成品图是「成品」，用户明确要别的图（风场/动图/双联图）时不抢
         _official: list = []
         print(f"[visualize] 官方成品图判定: plot={plot!r} field={_field0} box={_b0} "
@@ -367,7 +369,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 _fail(ctx, "风浪双联图", e)
 
         # ===== 风 + 浪 动图（明确要"动图/animation"时才做，较慢） =====
-        if plot in ("gif", "animation", "动图", "动画"):
+        #   全场/站点已用对方的成品动图 → 不再自己画；局地（闽南…）才自绘
+        if plot in ("gif", "animation", "动图", "动画") and not _official:
             try:
                 from . import viz_extra
                 images.extend(viz_extra.draw_wind_wave_gif(OUT_DIR, ctx, tag))

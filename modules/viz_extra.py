@@ -347,6 +347,9 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
                 return p
         return None
 
+    # 是否明确要动图（用户的"动图/动画"或调用方 want_anim）
+    _want_anim = want_anim or _plt in ("gif", "animation", "动图", "动画")
+
     # 大范围（跨度 >4°，如"全场"）优先按"场"给图；
     # 注意：场查询的 geo_stats 里通常也带站点，不能因此被误判成"纯站点问法"
     #   注意 _span 在"没有框"时是 99（那是给"是否算局地"用的），
@@ -365,8 +368,14 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
             if p:
                 got.append(p)
     elif _station and not _broad:
-        # 站点：他们的 0.01° 站点时序图（缺则回退 0.25° 全场曲线图）
-        p = _first(("timeseries", "curve_1"), code)
+        # 站点：要动图就给 0.01° 细网格的增水动图；否则给他们的站点时序图
+        p = (_first(("anim", "wind_surge"), code) if _want_anim
+             else _first(("timeseries", "curve_1"), code))
+        if p:
+            got.append(p)
+    elif _want_anim:
+        # 全场/大范围 + 要动图：优先"风+增水双面板"（全场 0.25°），退而取 0.01° 增水动图
+        p = _first(("wind_surge", "anim"), code)
         if p:
             got.append(p)
     else:
@@ -376,12 +385,6 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
             got.append(p)
         p = _first(("timeseries", "curve_1"), code)
         if p:
-            got.append(p)
-
-    if want_anim:
-        p = (ai_daily.fetch_product("wind_surge", code=code, date=d8)
-             or ai_daily.fetch_product("anim", code=code, date=d8))
-        if p and p.get("path") not in [g.get("path") for g in got]:
             got.append(p)
 
     ctx.results["official_products"] = got
