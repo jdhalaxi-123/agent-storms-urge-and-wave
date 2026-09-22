@@ -14,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TASK = "StormSurge-DailyPrewarm"
 WRAPPER = ROOT / "deploy" / "run_prewarm.bat"
+# 静默启动器：计划任务跑它 → 不再弹黑窗（WScript.Shell.Run 第二参数 0 = 隐藏窗口）
+HIDDEN = ROOT / "deploy" / "run_hidden.vbs"
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
 
 
@@ -31,7 +33,18 @@ def main() -> int:
         f'"{PY}" "{ROOT / "scripts" / "daily_prewarm.py"}" >> "{ROOT / "stormdata" / "logs" / "prewarm.log"}" 2>&1\r\n',
         encoding="utf-8",
     )
+    # ①' 再写一个静默启动器：计划任务执行它，就不会每 30 分钟闪一次黑窗
+    #     （必须纯 ASCII，避免编码问题；CP_UTF8 不用，VBS 默认按 ANSI 读纯 ASCII 没问题）
+    HIDDEN.write_text(
+        'Dim fso, sh, base\r\n'
+        'Set fso = CreateObject("Scripting.FileSystemObject")\r\n'
+        'Set sh = CreateObject("WScript.Shell")\r\n'
+        'base = fso.GetParentFolderName(WScript.ScriptFullName)\r\n'
+        'sh.Run """" & base & "\\run_prewarm.bat""", 0, False\r\n',
+        encoding="ascii",
+    )
     print(f"[OK] 调度脚本：{WRAPPER}")
+    print(f"[OK] 静默启动器：{HIDDEN}（计划任务用它执行，不弹黑窗）")
 
     # ② 先跑一次，确认能取数
     print("\n[1/2] 先跑一次预下载……")
@@ -44,13 +57,15 @@ def main() -> int:
 
     # ③ 注册计划任务
     print("\n[2/2] 注册计划任务……")
-    cmd = ["schtasks", "/Create", "/TN", TASK, "/TR", f'"{WRAPPER}"',
+    # ⭐ 用 wscript 执行 VBS，窗口完全隐藏（原来直接跑 .bat 会每 30 分钟闪黑窗）
+    cmd = ["schtasks", "/Create", "/TN", TASK,
+           "/TR", f'wscript.exe "{HIDDEN}"',
            "/SC", "MINUTE", "/MO", "30", "/F"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
                            encoding="utf-8", errors="ignore", timeout=120)
         if r.returncode == 0:
-            print(f"[OK] 已注册：{TASK}（每 30 分钟检查一次）")
+            print(f"[OK] 已注册：{TASK}（每 30 分钟检查一次，静默运行不弹窗）")
             print("     查看：任务计划程序 → 任务计划程序库 → " + TASK)
         else:
             print(f"[失败] {r.stdout.strip() or r.stderr.strip()}")
