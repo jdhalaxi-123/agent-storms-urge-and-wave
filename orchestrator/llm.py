@@ -414,9 +414,24 @@ _client = None
 
 
 def _get_client() -> OpenAI:
+    """DeepSeek 客户端。
+
+    ⭐ 必须**显式禁用代理**：本机（厦门台工作站）系统代理常指向 127.0.0.1:7897，
+    而那个代理程序不一定在运行 → 走代理就会 10061 拒绝连接，
+    表现为 agent 一直报 APIConnectionError（实测 2026-09-22）。
+    直连 api.deepseek.com 是通的，所以固定 trust_env=False。
+    """
     global _client
     if _client is None:
-        _client = OpenAI(api_key=_load_api_key(), base_url=BASE_URL)
+        try:
+            import httpx
+            _http = httpx.Client(trust_env=False, timeout=120.0)
+            _client = OpenAI(api_key=_load_api_key(), base_url=BASE_URL,
+                             http_client=_http, max_retries=2)
+            print("[llm] DeepSeek 客户端已创建（直连，忽略系统代理）")
+        except Exception as e:  # noqa: BLE001
+            print(f"[llm] 直连客户端创建失败，回退默认：{type(e).__name__}: {e}")
+            _client = OpenAI(api_key=_load_api_key(), base_url=BASE_URL)
     return _client
 
 
