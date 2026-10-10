@@ -1523,7 +1523,17 @@ def _attach_daily_wind(ctx: ModuleContext, target_date=None) -> Optional[Dict[st
                 box = (coord[0] - 1.5, coord[0] + 1.5, coord[1] - 1.5, coord[1] + 1.5)
             else:
                 box = (108.0, 136.0, 8.0, 36.0)
-        st = ai_daily.wind_stats(w, box, keep_slice=True)
+        # 用户点名了日期 → 风场只在**该日**里挑最强时刻（月日没写年份时用风场年份补全）
+        _only = ""
+        if target_date is not None:
+            try:
+                _d = target_date
+                if _d.year == 2000 and w.get("date"):
+                    _d = _d.replace(year=int(str(w["date"])[:4]))
+                _only = _d.strftime("%Y%m%d")
+            except Exception:
+                _only = ""
+        st = ai_daily.wind_stats(w, box, keep_slice=True, only_date=_only)
         w["stats"] = st
         # ⭐ 把"这一份风场到底是哪个框、哪个时刻、切片是什么"固定下来，
         #    交给 visualize 直接画 —— 文字与图必须同源（测试报告 P1 第 2 条）
@@ -1533,6 +1543,7 @@ def _attach_daily_wind(ctx: ModuleContext, target_date=None) -> Optional[Dict[st
             "date": w.get("date"),
             "box": list(box) if box else None,
             "region": str(ctx.request.get("region") or ""),
+            "only_date": st.get("only_date") or "",
             "stats": st,
         }
     except Exception as e:  # noqa: BLE001

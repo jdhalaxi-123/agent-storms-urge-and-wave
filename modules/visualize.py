@@ -951,6 +951,10 @@ def _draw_wind_from_spec(OUT_DIR: Path, ctx: ModuleContext, tag: str,
     plotstyle.add_wind_levels(ax, LON, LAT, spd, transform=ccrs.PlateCarree())
 
     title = f"{typh}号台风 风场" if typh else f"{region} 风场"
+    # 用户点名了日期：图题写明"只取该日最强时刻"，免得看成整段过程的峰值
+    _only = str((spec or {}).get("only_date") or "").strip()
+    if _only:
+        title = f"{title}（{_only} 当日最强时刻）"
     if t_label:
         title += f"　{t_label}"
     title += f"　最大风速 {max_spd:.1f} m/s"
@@ -965,6 +969,7 @@ def _draw_wind_from_spec(OUT_DIR: Path, ctx: ModuleContext, tag: str,
         "time_label": t_label,
         "box": list(box) if box else None,
         "region": region,
+        "only_date": _only or "",
     }
     return [plotstyle.save(fig, fp, dpi=150)]
 

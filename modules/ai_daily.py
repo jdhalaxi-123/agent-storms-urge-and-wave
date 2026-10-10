@@ -725,10 +725,12 @@ def wind_time_label(s_utc: str) -> str:
 
 
 def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None,
-               keep_slice: bool = False) -> Dict[str, Any]:
+               keep_slice: bool = False, only_date: str = "") -> Dict[str, Any]:
     """读每日风场文件，算关键风力指标（判断"风有多大、影响哪儿"）。
 
     box = (lon_min, lon_max, lat_min, lat_max)；None 用整个文件覆盖范围。
+    only_date = "YYYY-MM-DD"/"YYYYMMDD"：只在**该日期内**挑最强时刻
+    （用户问"10月11日的风场"时用；第一份反馈第 2 条：原来看不了指定日期的风）。
     返回：峰值风速/位置/时间、区域平均峰值、6/8/10 级格点数、4 个站点的最大风。
 
     keep_slice=True 时**同时返回峰值时刻的风场切片**（uu/vv/latv/lonv/peak_index）
@@ -774,13 +776,39 @@ def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None,
         la = np.asarray(sub[latn].values).ravel()
         lo = np.asarray(sub[lonn].values).ravel()
 
-        per_t = np.nanmax(spd, axis=(1, 2))
-        k = int(np.nanargmax(per_t))
-        jj, ii = np.unravel_index(np.nanargmax(spd[k]), spd[k].shape)
-        peak_ms = float(per_t[k])
+        # ⭐ 指定日期：只在该日期的时次里挑最强时刻（原来只能给"整段过程最强"，
+        #    用户问"10月11日的风场"却给了 10 月 14 日的图 —— 第一份反馈第 2 条）
+        sel = np.arange(spd.shape[0])
+        want_day = ""
+        if only_date:
+            d8 = str(only_date).replace("-", "").replace("/", "").strip()
+            if len(d8) >= 8 and d8[:8].isdigit():
+                want_day = f"{d8[:4]}-{d8[4:6]}-{d8[6:8]}"
+        if want_day and tv is not None and len(tv) == spd.shape[0]:
+            _days = np.array([str(t)[:10] for t in tv])
+            _m = (_days == want_day)
+            if not _m.any() and want_day.startswith("2000-"):
+                # 用户只说"10月11日"（没年份）时，用风场文件自己的年份补全
+                _y = str((info or {}).get("date") or "")[:4]
+                if len(_y) == 4 and _y.isdigit():
+                    _alt = f"{_y}-{want_day[5:]}"
+                    if (_days == _alt).any():
+                        want_day = _alt
+                        _m = (_days == _alt)
+            if _m.any():
+                sel = np.where(_m)[0]
+        spd_sel = spd[sel]
 
-        mean_t = np.nanmean(spd, axis=(1, 2))
-        km = int(np.nanargmax(mean_t))
+        per_t = np.nanmax(spd_sel, axis=(1, 2))
+        k_sel = int(np.nanargmax(per_t))
+        k = int(sel[k_sel])
+        jj, ii = np.unravel_index(np.nanargmax(spd_sel[k_sel]), spd_sel[k_sel].shape)
+        peak_ms = float(per_t[k_sel])
+
+        mean_t = np.nanmean(spd_sel, axis=(1, 2))
+        km_sel = int(np.nanargmax(mean_t))
+        km = int(sel[km_sel])
+        mean_peak_ms = float(mean_t[km_sel])
         flat = spd[km]
 
         stations = {}
@@ -788,10 +816,10 @@ def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None,
                           ("晋江", (118.50, 24.50)), ("东山东港", (117.50, 23.75))):
             ix = int(np.argmin(np.abs(lo - coord[0])))
             iy = int(np.argmin(np.abs(la - coord[1])))
-            s = spd[:, iy, ix]
-            ks = int(np.nanargmax(s))
+            s = spd_sel[:, iy, ix]
+            ks = int(sel[int(np.nanargmax(s))])
             stations[cn] = {
-                "speed_ms": round(float(s[ks]), 1),
+                "speed_ms": round(float(spd[ks, iy, ix]), 1),
                 "time": _tstr(tv, ks),
                 "time_bjt": utc_to_bjt(_tstr(tv, ks)),
             }
@@ -811,7 +839,7 @@ def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None,
                 "time_label": wind_time_label(peak_t),
             },
             "peak_index": int(k),
-            "mean_peak_ms": round(float(mean_t[km]), 1),
+            "mean_peak_ms": round(mean_peak_ms, 1),
             "mean_peak_time": mean_txt,
             "mean_peak_time_bjt": utc_to_bjt(mean_txt),
             "counts": {
@@ -821,13 +849,15 @@ def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None,
                 "n": int(flat.size),
             },
             "stations": stations,
-            "n_time": int(spd.shape[0]),
+            "n_time": int(len(sel)),
             "lon_range": [round(float(lo.min()), 2), round(float(lo.max()), 2)],
             "lat_range": [round(float(la.min()), 2), round(float(la.max()), 2)],
-            "start": _tstr(tv, 0),
-            "end": _tstr(tv, -1),
-            "start_bjt": utc_to_bjt(_tstr(tv, 0)),
-            "end_bjt": utc_to_bjt(_tstr(tv, -1)),
+            "start": _tstr(tv, int(sel[0])),
+            "end": _tstr(tv, int(sel[-1])),
+            "start_bjt": utc_to_bjt(_tstr(tv, int(sel[0]))),
+            "end_bjt": utc_to_bjt(_tstr(tv, int(sel[-1]))),
+            # 只在某一天里挑的最强时刻（用户点名日期时）
+            "only_date": want_day or "",
             "tz_note": "时间口径：世界时 UTC（北京时 = UTC + 8 小时）",
         }
         if keep_slice:

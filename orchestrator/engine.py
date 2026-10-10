@@ -267,6 +267,7 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                   "time_range": [(wind.get("stats") or {}).get("start"),
                                  (wind.get("stats") or {}).get("end")],
                   "tz_note": (wind.get("stats") or {}).get("tz_note"),
+                  "only_date": (wind.get("stats") or {}).get("only_date"),
                   } if wind else {}),
         "wind_figure": ctx.results.get("wind_figure_facts") or None,
         # ⭐ 数据完整性（缺站点总水位/天文潮/官方预警时，不许下"无风险"级结论）

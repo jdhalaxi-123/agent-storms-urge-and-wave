@@ -87,7 +87,8 @@ def _wind_markdown(ctx: ModuleContext, wind: Dict[str, Any],
               f"{wind.get('size_mb')} MB），为 AI 风暴潮/海浪预报的驱动风场。"]
     if st.get("tz_note"):
         L.append(f"- {st.get('tz_note')}")
-    L += ["", "（附图：风速填色 + 风向箭头，取**本次请求范围内**过程风速最强时刻；"
+    _scope = (f"**{st.get('only_date')} 当日**" if st.get("only_date") else "**本次请求范围内**")
+    L += ["", f"（附图：风速填色 + 风向箭头，取{_scope}过程风速最强时刻；"
               "**图题上的最大风速与时刻就是上面这条**）"]
     return "\n".join(L)
 
