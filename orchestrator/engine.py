@@ -97,6 +97,9 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                         "reply": ctx.results.get("brief", {}).get("markdown", ""),
                         "images": ctx.results.get("visualize", {}).get("images", []),
                         "image_notes": ctx.results.get("image_notes") or {},
+        # ⭐ 按用户要的日期/时段切好的现成表（逐时/逐3小时 + 分日范围），照抄即可
+        "requested_tables": ctx.results.get("requested_tables") or {},
+        "window_note": ctx.results.get("window_note") or "",
                         "docx_path": ctx.results.get("brief", {}).get("docx_path"),
                         "brief_template": ctx.results.get("brief", {}).get("template"),
                         "field_query": True,
@@ -148,6 +151,11 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     # 阶段一：分析
     ctx = modules.meta.run(ctx)        # ① 定位 NC
     ctx = modules.geo_stats.run(ctx)   # ② 提取 + 插值 + 统计
+    # ⭐ 按用户要的"某日/某时段"切出逐时、逐3小时、分日范围表（反馈第 2、4 条）
+    try:
+        modules.geo_stats.attach_requested_tables(ctx)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[engine] 生成请求窗口表失败：{_e}")
 
     # ⭐ 兜底：站点/场/序列一个都没取到 → 如实说明并请用户给明确位置，
     #    绝不能继续硬编一份"简报"（曾出现"未知海域风暴潮风险简报…橙色预警"这类假结论）
@@ -193,6 +201,9 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
         "images": ctx.results.get("visualize", {}).get("images", []),
         # ⭐ 每张图的准确说明（模型必须照这个说，不能把场图/场动图说成"某站的图"）
         "image_notes": ctx.results.get("image_notes") or {},
+        # ⭐ 按用户要的日期/时段切好的现成表（逐时/逐3小时 + 分日范围），照抄即可
+        "requested_tables": ctx.results.get("requested_tables") or {},
+        "window_note": ctx.results.get("window_note") or "",
         "docx_path": ctx.results.get("brief", {}).get("docx_path"),
         "brief_template": ctx.results.get("brief", {}).get("template"),
         # 每日风场（任务三）有独立的更新节奏，单独告知，别和风暴潮预报的时效混在一起说

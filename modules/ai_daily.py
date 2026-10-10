@@ -1256,6 +1256,33 @@ def update_info(now: Optional[datetime.datetime] = None, kind: str = "surge") ->
     return info
 
 
+def latest_tide_date(force: bool = False) -> str:
+    """对方"天文潮(潮位)"产品的最新日期（tide/*_tide_prediction_YYYYMMDD.csv）。
+
+    注意：该产品 2026-07-08 之后就没再更新，而站点增水一直在更新，
+    所以"问潮位"时常常拿不到当期数据 —— 必须如实说明，不能拿增水顶。
+    """
+    key = "tide:latest"
+    now = time.time()
+    if not force and key in _mem and now - _mem[key]["t"] < 600:
+        return _mem[key]["v"]
+    _cur_df = DF
+    best = ""
+    for root in DF_CANDIDATES:
+        try:
+            es = _ls(f"{root}/storm_surge_for_spatiotemporal_2/results_atm/tide")
+        except Exception:  # noqa: BLE001
+            continue
+        for e in es:
+            if e["dir"]:
+                continue
+            m = re.search(r"_tide_prediction_(\d{8})\.csv$", e["name"])
+            if m and m.group(1) > best:
+                best = m.group(1)
+    _mem[key] = {"t": now, "v": best}
+    return best
+
+
 def date_check(target_date: str, now: Optional[datetime.datetime] = None,
                kind: str = "surge") -> Dict[str, Any]:
     """检查用户想看的日期是否在最新预报的覆盖范围内。

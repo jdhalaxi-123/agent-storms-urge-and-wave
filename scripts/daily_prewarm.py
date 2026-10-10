@@ -37,12 +37,33 @@ sys.path.insert(0, str(ROOT))
 from orchestrator import ftp_catalog as fc  # noqa: E402
 from orchestrator import paths  # noqa: E402
 
-DF = "/group3/ATM_new/dailyforecast"
-POINT_DIR = f"{DF}/storm_surge_point_system/nc_file"
-SURGE_FIELD_DIR = f"{DF}/storm_surge_for_spatiotemporal_1/results_atm"
-WAVE_FIELD_DIR = f"{DF}/AutoWave/res_ATM"
-TOTAL_DIR = f"{DF}/storm_surge_for_spatiotemporal_2/results_atm"
-WAVE_POINT_DIR = f"{DF}/wave_for_single_point/outputs/nc_file"
+# ⭐ 不再写死镜像：对方有两条镜像（/group3/dailyforecast 与
+#    /group3/ATM_new/dailyforecast），谁的数据新用谁 —— 复用 ai_daily.refresh_df()。
+#    曾经写死 ATM_new，结果它停更在 09-19，脚本天天白下旧数据。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from modules import ai_daily as _ad  # noqa: E402
+
+
+def _roots():
+    """每次调用都取当前最新镜像（带 TTL，不会每条查询都探两次）。"""
+    df = _ad.refresh_df()
+    return {
+        "DF": df,
+        "POINT_DIR": f"{df}/storm_surge_point_system/nc_file",
+        "SURGE_FIELD_DIR": f"{df}/storm_surge_for_spatiotemporal_1/results_atm",
+        "WAVE_FIELD_DIR": f"{df}/AutoWave/res_ATM",
+        "TOTAL_DIR": f"{df}/storm_surge_for_spatiotemporal_2/results_atm",
+        "WAVE_POINT_DIR": f"{df}/wave_for_single_point/outputs/nc_file",
+    }
+
+
+_R = _roots()
+DF = _R["DF"]
+POINT_DIR = _R["POINT_DIR"]
+SURGE_FIELD_DIR = _R["SURGE_FIELD_DIR"]
+WAVE_FIELD_DIR = _R["WAVE_FIELD_DIR"]
+TOTAL_DIR = _R["TOTAL_DIR"]
+WAVE_POINT_DIR = _R["WAVE_POINT_DIR"]
 WIND_DIR = "/group3/wind"
 
 STATIONS = ["XMN", "CWU", "JNJ", "DSN"]
@@ -124,6 +145,14 @@ def prune_wind(keep_days: int, quiet: bool) -> int:
 
 
 def main() -> int:
+    # 每次运行都重新挑一次最新镜像（对方会在两条路径间切换）
+    try:
+        _R2 = _roots()
+        globals().update({k: v for k, v in _R2.items()})
+        log(f"数据根目录：{_R2['DF']}")
+    except Exception as _e:  # noqa: BLE001
+        log(f"[警告] 切换镜像失败，沿用 {DF}：{_e}")
+
     ap = argparse.ArgumentParser(description="每日数据自动下载")
     ap.add_argument("--no-wind", action="store_true", help="不下载风场（259 MB/天）")
     ap.add_argument("--keep-wind-days", type=int, default=30,

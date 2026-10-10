@@ -1903,3 +1903,240 @@ def run_wave(ctx: ModuleContext, hours: Optional[int] = None) -> Dict[str, Any]:
         "point": sampled_at or None,
         "mode": "point" if pt else "box",
     }
+
+
+# --------------------------------------------------------------------------- #
+# ⭐ 按用户要的"某日/某时段"精确切数据，并生成现成的表（反馈第 2、4 条）
+# --------------------------------------------------------------------------- #
+WAVE_GRADES = [(14.0, "怒涛"), (9.0, "狂涛"), (6.0, "狂浪"), (4.0, "巨浪"),
+               (2.5, "大浪"), (1.25, "中浪"), (0.5, "轻浪"), (0.1, "小浪")]
+
+
+def wave_grade(hs: float) -> str:
+    """有效波高(m) → 浪级（GB/T 14914 习惯分级）。"""
+    if hs is None:
+        return ""
+    for th, name in WAVE_GRADES:
+        if hs >= th:
+            return name
+    return "微浪"
+
+
+def surge_grade(cm: float) -> str:
+    """增水(cm) → 预警级别（与业务判级一致）。"""
+    if cm is None:
+        return ""
+    for th, name in ((120, "红色"), (80, "橙色"), (50, "黄色"), (30, "蓝色")):
+        if cm >= th:
+            return f"{name}预警"
+    return "无"
+
+
+def _latest_start_date(ctx) -> "datetime.date | None":
+    """本次预报的起始日（从 geo_stats/meta 里拿）。"""
+    geo = ctx.results.get("geo_stats") or {}
+    for src in (geo.get("sites") or [])[:1]:
+        if src.get("start_dt"):
+            return src["start_dt"].date() if hasattr(src["start_dt"], "date") else None
+    ws = ctx.results.get("wave_stats") or {}
+    sd = ws.get("start_dt")
+    if sd:
+        try:
+            return sd.date()
+        except Exception:  # noqa: BLE001
+            return None
+    fd = str(geo.get("field_date") or "")
+    if len(fd) == 8 and fd.isdigit():
+        return datetime.date(int(fd[:4]), int(fd[4:6]), int(fd[6:]))
+    return None
+
+
+def _parse_window(ctx):
+    """解析用户要的时段 → (start_date, end_date, step_hours, why)。
+
+    支持：10月10日 / 10月10日至10月16日 / 10/10-10/16 / 次日·明天 / 未来N天。
+    解析不出来就返回 (None, None, step, "未指定具体日期")。
+    """
+    raw = str(ctx.request.get("raw", "") or "")
+    slot = str(ctx.request.get("date", "") or "")
+    tw = str(ctx.request.get("time_window", "") or "")
+    src = (raw + " " + slot).strip()
+    step = 3 if any(k in src for k in ("逐3", "每3", "3小时", "三小时")) else 1
+    base = _latest_start_date(ctx)
+    today = datetime.date.today()
+
+    def _mk(mo, dy, yr=None):
+        y = yr or (base.year if base else today.year)
+        try:
+            return datetime.date(y, mo, dy)
+        except ValueError:
+            return None
+
+    # 1) "2026年10月10日" 这类带年的
+    full = re.findall(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", src)
+    if full:
+        ds = [_mk(int(m), int(d), int(y)) for y, m, d in full]
+        ds = [d for d in ds if d]
+        if ds:
+            return min(ds), max(ds), step, ""
+    # 2) "10月10日"（可能两个 → 时段）
+    md = re.findall(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", src)
+    if md:
+        ds = [_mk(int(a), int(b)) for a, b in md]
+        ds = [d for d in ds if d]
+        if ds:
+            return min(ds), max(ds), step, ""
+    # 3) "10/10" 或 "10-10" 或 "10月10-16日"
+    sl = re.findall(r"(\d{1,2})\s*[/\-]\s*(\d{1,2})", src)
+    if len(sl) >= 1:
+        ds = [_mk(int(a), int(b)) for a, b in sl]
+        ds = [d for d in ds if d]
+        if ds:
+            return min(ds), max(ds), step, ""
+    # 4) 相对日期
+    if base:
+        if "后天" in src:
+            d = base + datetime.timedelta(days=2)
+            return d, d, step, ""
+        if "明天" in src or "次日" in src or "明日" in src:
+            d = base + datetime.timedelta(days=1)
+            return d, d, step, ""
+        m = re.search(r"未来\s*(\d+)\s*天", tw or src)
+        if m:
+            n = max(1, int(m.group(1)))
+            return base, base + datetime.timedelta(days=n - 1), step, ""
+    return None, None, step, "未指定具体日期"
+
+
+def _series_candidates(ctx):
+    """把手上的逐时序列集中起来：[(名称, 序列, 起始时刻, 单位, 类型)]"""
+    out = []
+    geo = ctx.results.get("geo_stats") or {}
+    ws = ctx.results.get("wave_stats") or {}
+    for s in (geo.get("sites") or []):
+        nm = str(s.get("name") or s.get("short") or "站点")
+        if s.get("series_cm"):
+            out.append((f"{nm}增水", list(s["series_cm"]), s.get("start_dt"), "cm", "surge"))
+        if s.get("series_wave_m"):
+            out.append((f"{nm}有效波高", list(s["series_wave_m"]), s.get("start_dt"), "m", "wave"))
+    if ws.get("series"):
+        sd = ws.get("start_dt")
+        out.append((f"{ws.get('region') or ctx.request.get('region') or ''}有效波高",
+                    list(ws["series"]), sd, "m", "wave"))
+    # ⭐ 天文潮（潮位）与总水位：用户问"潮位"时必须给这个，别再拿增水顶（反馈第 1 条）
+    tt = geo.get("tide_total") or {}
+    if tt.get("series_tide_cm"):
+        out.append(("天文潮(潮位)", list(tt["series_tide_cm"]),
+                    tt.get("start_dt"), "cm", "tide"))
+    if tt.get("series_total_cm"):
+        out.append(("总水位", list(tt["series_total_cm"]),
+                    tt.get("start_dt"), "cm", "tide"))
+    return out
+
+
+def attach_requested_tables(ctx) -> None:
+    """按用户要的窗口切序列，并把现成的表挂到 ctx.results 上供模型照抄。"""
+    try:
+        cands = _series_candidates(ctx)
+        if not cands:
+            return
+        start, end, step, why = _parse_window(ctx)
+        tables = {}
+        notes = []
+        for name, series, sdt, unit, kind in cands:
+            if not series or sdt is None:
+                continue
+            try:
+                t0 = sdt if not hasattr(sdt, "to_pydatetime") else sdt.to_pydatetime()
+            except Exception:  # noqa: BLE001
+                t0 = sdt
+            n = len(series)
+            end_dt = t0 + datetime.timedelta(hours=n - 1)
+            # 覆盖范围提示
+            if start and end:
+                if start < t0.date():
+                    notes.append(f"{name}：数据从 {t0:%m-%d} 开始，{start:%m-%d} 之前没有数据。")
+                if end > end_dt.date():
+                    notes.append(f"{name}：预报只到 {end_dt:%m-%d} {end_dt:%H:%M}，"
+                                 f"你要的 {end:%m-%d} 尚无预报，无法给出。")
+            lo = t0
+            hi = end_dt
+            if start:
+                lo = max(lo, datetime.datetime.combine(start, datetime.time(0, 0)))
+            if end:
+                hi = min(hi, datetime.datetime.combine(end, datetime.time(23, 0)))
+            rows = []
+            k = 0
+            while k < n:
+                tk = t0 + datetime.timedelta(hours=k)
+                if tk < lo or tk > hi:
+                    k += 1
+                    continue
+                if (k % step) == 0:
+                    v = series[k]
+                    if v is not None:
+                        row = {"time": tk.strftime("%m-%d %H:%M"),
+                               "value": round(float(v), 2)}
+                        if kind == "wave":
+                            row["grade"] = wave_grade(float(v))
+                        elif kind == "tide":
+                            row["grade"] = ""          # 潮位本身不判级
+                        else:
+                            row["grade"] = surge_grade(float(v))
+                        rows.append(row)
+                k += 1
+            if not rows:
+                continue
+            # 按天范围
+            daily = {}
+            for row in rows:
+                d = row["time"][:5]
+                cur = daily.setdefault(d, {"date": d, "min": row["value"],
+                                           "max": row["value"], "n": 0})
+                cur["min"] = min(cur["min"], row["value"])
+                cur["max"] = max(cur["max"], row["value"])
+                cur["n"] += 1
+            daily_rows = []
+            for d in sorted(daily):
+                c = daily[d]
+                if kind == "wave":
+                    c["grade"] = f"{wave_grade(c['min'])}~{wave_grade(c['max'])}" \
+                        if wave_grade(c["min"]) != wave_grade(c["max"]) else wave_grade(c["max"])
+                elif kind == "tide":
+                    c["grade"] = ""
+                else:
+                    c["grade"] = surge_grade(c["max"])
+                daily_rows.append({"date": c["date"], "min": c["min"],
+                                   "max": c["max"], "grade": c["grade"]})
+            tables[name] = {
+                "unit": unit, "kind": kind, "step_hours": step,
+                "window": (f"{lo:%m-%d %H:%M} ~ {hi:%m-%d %H:%M}"),
+                "n_points": len(rows),
+                "series_table": rows[:200],
+                "daily_ranges": daily_rows,
+            }
+        if tables:
+            ctx.results["requested_tables"] = tables
+            print(f"[geo_stats] 已按请求窗口生成表："
+                  f"{ {k: v['window'] for k, v in tables.items()} }")
+        # ⭐ 用户问"潮位"，但对方天文潮产品没更新到这天 → 如实说明，别拿增水顶
+        _raw_l = str(ctx.request.get("raw", "") or "")
+        if ("潮位" in _raw_l) and not any("天文潮" in k for k in tables):
+            try:
+                from . import ai_daily as _ad
+                _td = _ad.latest_tide_date()
+            except Exception:  # noqa: BLE001
+                _td = ""
+            notes.append(
+                f"你要的是**潮位**，但课题三的「天文潮(潮位)」产品最新只到 "
+                f"{(f'{_td[:4]}-{_td[4:6]}-{_td[6:]}' if _td else '（无）')}，"
+                "此后没有更新，因此**无法给出该日期的逐时潮位**；"
+                "下面表中给出的是**风暴增水**（不是潮位），请勿混用。"
+            )
+        if notes or why:
+            ctx.results["window_note"] = " ".join(notes + ([why] if why else []))
+            if notes:
+                print(f"[geo_stats] 窗口提示：{ctx.results['window_note']}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[geo_stats] 生成请求窗口表失败：{type(e).__name__}: {e}")
+
