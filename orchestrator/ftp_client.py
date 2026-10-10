@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
+import time
 from pathlib import Path
 
 # 项目根 /.env 加载
@@ -39,15 +41,115 @@ def ftp_config() -> dict:
     }
 
 
-def _connect():
+def _connect(pasv: bool = True):
     from ftplib import FTP
 
     c = ftp_config()
     ftp = FTP()
-    ftp.connect(c["host"], c["port"], timeout=30)
-    ftp.login(c["user"], c["pass"])
-    ftp.set_pasv(True)  # 被动模式(防火墙友好)
+    try:
+        ftp.connect(c["host"], c["port"], timeout=30)
+        ftp.login(c["user"], c["pass"])
+    except Exception as e:  # noqa: BLE001
+        note_error("connect", f"{type(e).__name__}: {e}")
+        raise
+    ftp.set_pasv(bool(pasv))  # 被动模式(防火墙友好)
     return ftp
+
+
+# --------------------------------------------------------------------------- #
+# 失败语义：把"取数失败"和"业务上没有这个数据"分开
+#   测试报告 P1：FTP 425（被动模式数据连接被拒）被上层统一报成 no_data，
+#   业务同事会以为"厦门站的增水数据根本不存在"，而不是"这次没取上"。
+# --------------------------------------------------------------------------- #
+_ERRORS: list = []          # 最近若干次失败（含时间戳）
+_MAX_ERRORS = 30
+
+
+def note_error(where: str, msg: str) -> None:
+    """记一次取数失败（供上层判断到底是"没数据"还是"没取上"）。"""
+    try:
+        _ERRORS.append({"t": time.time(), "where": str(where), "msg": str(msg)[:400],
+                        "kind": classify_error(msg)})
+    except Exception:
+        pass
+    while len(_ERRORS) > _MAX_ERRORS:
+        _ERRORS.pop(0)
+
+
+def classify_error(msg: str) -> str:
+    """把底层报错归类：data_access_error / auth_error / timeout / not_found / unknown。"""
+    s = str(msg or "")
+    low = s.lower()
+    if "425" in s or "can't open data connection" in low or "cannot open data connection" in low:
+        return "data_access_error"
+    if "530" in s or "login" in low or "authentication" in low or "认证" in s:
+        return "auth_error"
+    if "timed out" in low or "timeout" in low or "超时" in s:
+        return "timeout"
+    if "550" in s or "not found" in low or "no such file" in low or "不存在" in s:
+        return "not_found"
+    if "10061" in s or "refused" in low or "unreachable" in low or "getaddrinfo" in low:
+        return "data_access_error"
+    return "unknown"
+
+
+_KIND_TEXT = {
+    "data_access_error": (
+        "课题数据库（FTP）**数据连接被拒**",
+        "这是取数通道的问题，不是“没有这份数据”：FTP 服务器返回 425（被动模式数据端口没打开）。"
+        "系统已自动重连重试若干次；请稍后再问一次。若持续出现，请让运维检查 "
+        "FTP(120.42.36.229:22210) 的被动端口范围/防火墙，或改用主动模式。"),
+    "auth_error": (
+        "课题数据库（FTP）**登录被拒**",
+        "账号或密码不对（530）。请检查 .env 里的 FTP_USER / FTP_PASS 是否过期。"),
+    "timeout": (
+        "课题数据库（FTP）**连接超时**",
+        "网络或服务器响应慢。请稍后重试；若持续，请检查本机到 120.42.36.229:22210 的网络。"),
+    "not_found": (
+        "课题数据库上**没有找到该文件**",
+        "远程路径不存在（550）。可能是该期产品尚未发布，或文件名/目录变了。"),
+    "unknown": (
+        "取数过程**出现异常**",
+        "详见下方原始报错；请重试一次，持续失败请把原始报错发给技术支持。"),
+}
+
+
+def recent_errors(within: float = 180.0) -> list:
+    """最近一段时间内的取数失败记录。"""
+    now = time.time()
+    return [e for e in _ERRORS if now - float(e.get("t") or 0) <= within]
+
+
+def diagnose_errors(within: float = 180.0) -> dict:
+    """汇总最近的失败，给出可直接写进回复的"状态 + 原因 + 处置建议"。
+
+    没有任何失败记录时返回 {}（= 真的没有这份数据，按 no_data 说）。
+    """
+    errs = recent_errors(within)
+    if not errs:
+        return {}
+    kinds = [e.get("kind") or "unknown" for e in errs]
+    # 优先报最"硬"的那个：认证 > 连接/取数 > 超时 > 未知
+    order = ["auth_error", "data_access_error", "timeout", "not_found", "unknown"]
+    kind = next((k for k in order if k in kinds), kinds[-1])
+    head, advice = _KIND_TEXT.get(kind, _KIND_TEXT["unknown"])
+    last = errs[-1]
+    detail = str(last.get("msg") or "")
+    n = len(errs)
+    return {
+        "status": kind,
+        "title": head,
+        "detail": detail,
+        "where": str(last.get("where") or ""),
+        "count": n,
+        "advice": advice,
+        "raw": f"最近 {int(within)} 秒内取数失败 {n} 次；最后一次："
+               f"{last.get('where')} → {detail}",
+    }
+
+
+def clear_errors() -> None:
+    _ERRORS.clear()
 
 
 def list_dir(path: str = "/") -> None:
@@ -200,18 +302,55 @@ def tree(path: str = "/", depth: int = 0, max_depth: int = 3) -> None:
         ftp.quit()
 
 
-def download(remote: str, local: str) -> bool:
-    """下载单个文件。"""
-    ftp = _connect()
+def _download_once(remote: str, local: str, pasv: bool = True) -> None:
+    """一次下载尝试（失败直接抛异常，由 download() 决定重试）。"""
+    ftp = _connect(pasv=pasv)
     try:
-        Path(local).parent.mkdir(parents=True, exist_ok=True)
         with open(local, "wb") as f:
             ftp.retrbinary(f"RETR {remote}", f.write)
-        print(f"下载完成: {remote} -> {local} ({os.path.getsize(local)}B)")
-        return True
-    except Exception as e:
-        print(f"下载失败 {remote}:", e)
-        return False
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            try:
+                ftp.close()
+            except Exception:
+                pass
+
+
+def download(remote: str, local: str, retries: int = 2, quiet: bool = False) -> bool:
+    """下载单个文件。
+
+    ⭐ 会**重连重试**：课题数据库偶发 425（被动模式数据连接被拒）——
+    实测这类失败多数是瞬时/端口偶发，换一条连接重来就能成功。
+    第 1~2 次用被动模式（防火墙友好），最后一次退到主动模式碰一下运气。
+    失败原因会记进 note_error()，上层据此区分"没取上"和"没这份数据"。
+    """
+    Path(local).parent.mkdir(parents=True, exist_ok=True)
+    plans = [True, True, False]            # 两次被动 + 一次主动
+    plans = plans[: max(1, int(retries) + 1)]
+    for i, pasv in enumerate(plans):
+        try:
+            _download_once(remote, local, pasv=pasv)
+            if os.path.getsize(local) > 0:
+                if not quiet:
+                    print(f"下载完成: {remote} -> {local} ({os.path.getsize(local)}B)")
+                return True
+            note_error(f"download {remote}", "下载后文件为空")
+        except Exception as e:  # noqa: BLE001
+            note_error(f"download {remote}", f"{type(e).__name__}: {e}")
+            if not quiet:
+                print(f"下载失败（第 {i + 1}/{len(plans)} 次，"
+                      f"{'被动' if pasv else '主动'}模式）{remote}: {e}")
+        # 清掉半截文件，别让下一次误判成"已缓存"
+        try:
+            if Path(local).exists():
+                Path(local).unlink()
+        except Exception:
+            pass
+        if i + 1 < len(plans):
+            time.sleep(0.8 * (i + 1))
+    return False
 
 
 def sync_dir(remote_dir: str, local_dir: str = "", keyword: str = "", max_files: int = 20) -> dict:

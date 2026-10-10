@@ -324,11 +324,13 @@ def fetch(remote: str, force: bool = False, expected_size: int = 0, quiet: bool 
     for attempt in (1, 2):                      # 瞬时失败重试一次
         buf = io.StringIO()
         try:
+            # retries=1：download() 内部已含"重连 + 被动/主动模式"两次尝试，
+            # 这里再叠一层外层重试（共 4 次），既治偶发 425 又不至于卡太久。
             if quiet:
                 with contextlib.redirect_stdout(buf):
-                    ok = ftp_client.download(remote, str(local))
+                    ok = ftp_client.download(remote, str(local), retries=1)
             else:
-                ok = ftp_client.download(remote, str(local))
+                ok = ftp_client.download(remote, str(local), retries=1)
             last_msg = buf.getvalue().strip()
         except Exception as e:  # noqa: BLE001
             ok, last_msg = False, f"{type(e).__name__}: {e}"
@@ -351,6 +353,8 @@ def fetch(remote: str, force: bool = False, expected_size: int = 0, quiet: bool 
             time.sleep(1.5)
 
     print(f"[ftp_catalog] 下载失败 {remote}：{last_msg or '未知原因（返回 False 且无提示）'}")
+    # ⭐ 把失败原因留痕：上层据此区分"这次没取上(425/超时/认证)"和"确实没有这份数据"
+    ftp_client.note_error(f"fetch {remote}", last_msg or "未知原因（返回 False 且无提示）")
     return None
 
 

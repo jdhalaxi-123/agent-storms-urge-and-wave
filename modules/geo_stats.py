@@ -1523,7 +1523,18 @@ def _attach_daily_wind(ctx: ModuleContext, target_date=None) -> Optional[Dict[st
                 box = (coord[0] - 1.5, coord[0] + 1.5, coord[1] - 1.5, coord[1] + 1.5)
             else:
                 box = (108.0, 136.0, 8.0, 36.0)
-        w["stats"] = ai_daily.wind_stats(w, box)
+        st = ai_daily.wind_stats(w, box, keep_slice=True)
+        w["stats"] = st
+        # ⭐ 把"这一份风场到底是哪个框、哪个时刻、切片是什么"固定下来，
+        #    交给 visualize 直接画 —— 文字与图必须同源（测试报告 P1 第 2 条）
+        ctx.results["wind_spec"] = {
+            "file": w.get("file"),
+            "path": w.get("path"),
+            "date": w.get("date"),
+            "box": list(box) if box else None,
+            "region": str(ctx.request.get("region") or ""),
+            "stats": st,
+        }
     except Exception as e:  # noqa: BLE001
         print(f"[geo_stats] 风场指标计算失败: {e}")
     ctx.results["daily_wind"] = w

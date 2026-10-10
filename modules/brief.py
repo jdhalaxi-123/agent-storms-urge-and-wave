@@ -41,22 +41,30 @@ def _wind_markdown(ctx: ModuleContext, wind: Dict[str, Any],
 
     L = [f"## {region} 风场预报（每日风场 · 起报 {date_txt}）", ""]
     if pk:
+        # ⭐ 时间统一写成"世界时 UTC（北京时 …）"：nc 时间轴是 UTC，
+        #    只写 12:00 会被当成北京时，差 8 小时（也避免图文时间写法不一致）
+        _pt = pk.get("time_label") or str(pk.get("time", "")).replace("T", " ")
         L.append(f"- **过程最大风速 {pk.get('speed_ms')} m/s（{pk.get('beaufort')}，"
                  f"约 {pk.get('speed_kmh')} km/h）**，出现在 "
-                 f"{pk.get('lon')}°E, {pk.get('lat')}°N，{str(pk.get('time','')).replace('T',' ')}")
+                 f"{pk.get('lon')}°E, {pk.get('lat')}°N，{_pt}")
     if st.get("mean_peak_ms") is not None:
-        L.append(f"- 区域平均风速峰值 {st.get('mean_peak_ms')} m/s"
-                 f"（{str(st.get('mean_peak_time','')).replace('T',' ')}）")
+        _mt = (st.get("mean_peak_time") or "")
+        _mt_b = st.get("mean_peak_time_bjt") or ""
+        _mt_txt = f"{_mt} UTC（北京时 {_mt_b[11:]}）" if _mt and _mt_b else _mt
+        L.append(f"- 区域平均风速峰值 {st.get('mean_peak_ms')} m/s（{_mt_txt}）")
     if counts:
         L.append(f"- 峰值时刻达到 6 级（≥10.8 m/s）的格点 {counts.get('g6')} 个，"
                  f"8 级（≥17.2 m/s）{counts.get('g8')} 个，"
                  f"10 级（≥24.5 m/s）{counts.get('g10')} 个（共 {counts.get('n')} 个格点）")
     stations = st.get("stations") or {}
     if stations:
-        L += ["", "**代表站点最大风**", "", "| 站点 | 最大风速 | 出现时间 | 风力 |",
+        L += ["", "**代表站点最大风**", "",
+              "| 站点 | 最大风速 | 出现时间（世界时 / 北京时） | 风力 |",
               "| --- | --- | --- | --- |"]
         for cn, v in stations.items():
             t = str(v.get("time", "")).replace("T", " ")
+            tb = str(v.get("time_bjt", "") or "")
+            t_txt = f"{t[5:]} UTC / {tb[5:]} BJT" if (t and tb) else t
             ms = v.get("speed_ms")
             bf = ""
             try:
@@ -64,16 +72,23 @@ def _wind_markdown(ctx: ModuleContext, wind: Dict[str, Any],
                 bf = _ad.beaufort(float(ms))
             except Exception:
                 bf = ""
-            L.append(f"| {cn} | {ms} m/s | {t} | {bf} |")
+            L.append(f"| {cn} | {ms} m/s | {t_txt} | {bf} |")
     if st.get("start"):
-        L += ["", f"- 时效：{str(st.get('start')).replace('T',' ')} ~ "
-                  f"{str(st.get('end')).replace('T',' ')}（逐时，共 {st.get('n_time')} 个时次）"]
+        _s0, _s1 = str(st.get("start")).replace("T", " "), str(st.get("end")).replace("T", " ")
+        _b0, _b1 = str(st.get("start_bjt") or ""), str(st.get("end_bjt") or "")
+        _rng = f"{_s0} ~ {_s1}（UTC）"
+        if _b0 and _b1:
+            _rng += f"，即北京时 {_b0} ~ {_b1}"
+        L += ["", f"- 时效：{_rng}（逐时，共 {st.get('n_time')} 个时次）"]
     if st.get("lon_range"):
         L.append(f"- 范围：{st['lon_range'][0]}~{st['lon_range'][1]}°E，"
                  f"{st['lat_range'][0]}~{st['lat_range'][1]}°N")
     L += ["", f"- 数据来源：课题三每日风场（{wind.get('file')}，"
               f"{wind.get('size_mb')} MB），为 AI 风暴潮/海浪预报的驱动风场。"]
-    L += ["", "（附图：风速填色 + 风向箭头，取关注海域风速最强时刻）"]
+    if st.get("tz_note"):
+        L.append(f"- {st.get('tz_note')}")
+    L += ["", "（附图：风速填色 + 风向箭头，取**本次请求范围内**过程风速最强时刻；"
+              "**图题上的最大风速与时刻就是上面这条**）"]
     return "\n".join(L)
 
 

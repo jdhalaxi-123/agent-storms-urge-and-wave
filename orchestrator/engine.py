@@ -24,6 +24,13 @@ def run(request: str) -> Dict[str, Any]:
 
 def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     """槽位入口：LLM 工具调用直接给结构化参数。"""
+    # 每次查询开始清空"取数失败"记录：这样"本次查询有没有取数失败"是准确的，
+    # 不会把上一轮的失败算到这一轮头上（见 ftp_client.diagnose_errors）。
+    try:
+        from . import ftp_client as _fc0
+        _fc0.clear_errors()
+    except Exception:
+        pass
     # ⭐「EC 预报 / 欧洲中心 / ECMWF」不是地名：指的是 EC 起报的那版预报。
     #    统一按"全场"处理并标记取 EC 那张动图；否则会被当成不认识的地点，
     #    退化成任意点采样(point_grid)→被判成"局地"→官方动图整条被跳过。
@@ -97,14 +104,26 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                         "reply": ctx.results.get("brief", {}).get("markdown", ""),
                         "images": ctx.results.get("visualize", {}).get("images", []),
                         "image_notes": ctx.results.get("image_notes") or {},
-        # ⭐ 按用户要的日期/时段切好的现成表（逐时/逐3小时 + 分日范围），照抄即可
-        "requested_tables": ctx.results.get("requested_tables") or {},
-        "window_note": ctx.results.get("window_note") or "",
+                        # ⭐ 按用户要的日期/时段切好的现成表（逐时/逐3小时 + 分日范围），照抄即可
+                        "requested_tables": ctx.results.get("requested_tables") or {},
+                        "window_note": ctx.results.get("window_note") or "",
                         "docx_path": ctx.results.get("brief", {}).get("docx_path"),
                         "brief_template": ctx.results.get("brief", {}).get("template"),
                         "field_query": True,
                         "wind": ({"file": _w.get("file"), "date": _w.get("date"),
-                                  "size_mb": _w.get("size_mb")} if _w else {}),
+                                  "size_mb": _w.get("size_mb"),
+                                  "stats": (_w.get("stats") or {}).get("peak"),
+                                  "mean_peak_ms": (_w.get("stats") or {}).get("mean_peak_ms"),
+                                  "mean_peak_time": (_w.get("stats") or {}).get("mean_peak_time"),
+                                  "stations": (_w.get("stats") or {}).get("stations"),
+                                  "counts": (_w.get("stats") or {}).get("counts"),
+                                  "time_range": [(_w.get("stats") or {}).get("start"),
+                                                 (_w.get("stats") or {}).get("end")],
+                                  "tz_note": (_w.get("stats") or {}).get("tz_note"),
+                                  } if _w else {}),
+                        "wind_figure": ctx.results.get("wind_figure_facts") or None,
+                        "data_quality": (ctx.results.get("assess") or {}).get(
+                            "data_completeness") or None,
                         "meta": ctx.meta,
                     }
             # 场数据不可用 → 退回追问
@@ -162,10 +181,39 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     _g = ctx.results.get("geo_stats") or {}
     if not (_g.get("sites") or _g.get("field_stats") or _g.get("series")):
         _r = str(slots.get("region") or "").strip()
+        # ⭐ 先分清"这次没取上"和"确实没有这份数据"（测试报告 P1 第 4 条）：
+        #    FTP 425/超时/认证失败时绝不能报成 no_data，否则业务同事会以为
+        #    "系统里根本没有厦门站的数据"。
+        _diag = {}
+        try:
+            from . import ftp_client as _fc
+            _diag = _fc.diagnose_errors()
+        except Exception:
+            _diag = {}
+        if _diag:
+            memory.append({"request": raw or slots.get("raw", ""), "slots": slots,
+                           "status": _diag.get("status"), "detail": _diag.get("detail")})
+            return {
+                "reply": (f"这次**没能从课题数据库取到{_r or '该海域'}的数据**——"
+                          f"{_diag.get('title', '取数失败')}，属于**取数/通道问题**，"
+                          "不是“系统里没有这份数据”。\n\n"
+                          f"- 原始报错：`{_diag.get('detail') or '（未记录到详细报错）'}`\n"
+                          f"- 影响范围：本次查询涉及的远程文件都没取回来\n"
+                          f"- 处置建议：{_diag.get('advice', '稍后重试一次。')}\n"
+                          "（系统不会在取数失败的情况下编造任何数值或结论。）"),
+                "images": [],
+                "docx_path": None,
+                "brief_template": _diag.get("status") or "data_access_error",
+                "status": _diag.get("status") or "data_access_error",
+                "error_detail": _diag.get("detail") or "",
+                "advice": _diag.get("advice") or "",
+                "meta": {"status": _diag.get("status"), "region": _r,
+                         "error": _diag.get("raw")},
+            }
         memory.append({"request": raw or slots.get("raw", ""), "slots": slots,
                        "status": "no_data"})
         return {
-            "reply": (f"抱歉，没有取到「{_r or '该海域'}」的预报数据，暂时无法给出结论，"
+            "reply": (f"没有取到「{_r or '该海域'}」的预报数据，暂时无法给出结论，"
                       "也就不出图和简报了。\n\n"
                       "请换一个更明确的位置再问一次，例如：\n"
                       "- 站点：厦门、崇武、晋江、东山东港\n"
@@ -176,6 +224,7 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
             "images": [],
             "docx_path": None,
             "brief_template": "no_data",
+            "status": "no_data",
             "meta": {"status": "no_data", "region": _r},
         }
 
@@ -208,7 +257,20 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
         "brief_template": ctx.results.get("brief", {}).get("template"),
         # 每日风场（任务三）有独立的更新节奏，单独告知，别和风暴潮预报的时效混在一起说
         "wind": ({"file": wind.get("file"), "date": wind.get("date"),
-                  "size_mb": wind.get("size_mb")} if wind else {}),
+                  "size_mb": wind.get("size_mb"),
+                  # ⭐ 文字要报的风场数：与风场图题**同源**（同一个框、同一时刻）
+                  "stats": (wind.get("stats") or {}).get("peak"),
+                  "mean_peak_ms": (wind.get("stats") or {}).get("mean_peak_ms"),
+                  "mean_peak_time": (wind.get("stats") or {}).get("mean_peak_time"),
+                  "stations": (wind.get("stats") or {}).get("stations"),
+                  "counts": (wind.get("stats") or {}).get("counts"),
+                  "time_range": [(wind.get("stats") or {}).get("start"),
+                                 (wind.get("stats") or {}).get("end")],
+                  "tz_note": (wind.get("stats") or {}).get("tz_note"),
+                  } if wind else {}),
+        "wind_figure": ctx.results.get("wind_figure_facts") or None,
+        # ⭐ 数据完整性（缺站点总水位/天文潮/官方预警时，不许下"无风险"级结论）
+        "data_quality": (ctx.results.get("assess") or {}).get("data_completeness") or None,
         "meta": ctx.meta,
         # ⭐ 出图失败的原因（供对话里如实告知用户；没有失败则为 None）
         "plot_error": ctx.results.get("visualize_error") or None,

@@ -451,6 +451,17 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 if _b.startswith(_pre):
                     _notes[_k] = _txt
                     break
+        # ⭐ 风场图：把**图题上的数**写进 image_notes，模型照抄就不会与正文打架
+        #    （测试报告 P1：正文 16.3 m/s@10-15、图题 16.6 m/s@10-10）
+        _facts = ctx.results.get("wind_figure_facts") or {}
+        if _facts:
+            for _p in images:
+                if Path(str(_p)).name.startswith("wind_field"):
+                    _notes[str(_p)] = (
+                        f"本系统自绘 · 风场图（风速填色+风向箭头）；图题写的是"
+                        f"“{(str(_facts.get('region') or '').strip() or '关注海域')} 风场 "
+                        f"{_facts.get('time_label')} 最大风速 {_facts.get('max_spd')} m/s”。"
+                        "**正文里报的风场峰值与时刻必须与图题完全一致，一个字都不许改**")
     except Exception as e:  # noqa: BLE001
         print(f"[visualize] 写 image_notes 失败: {e}")
 
@@ -866,10 +877,103 @@ def _times_to_dates(times, src_name: str):
         return None
 
 
+def _draw_wind_from_spec(OUT_DIR: Path, ctx: ModuleContext, tag: str,
+                         spec: Dict[str, Any]) -> list:
+    """按 `wind_spec` 画风场：用 geo_stats 已经算好的**同一个框、同一个时刻**。
+
+    为什么单独走这条路：以前风场图自己另选一个"关注海域(台湾海峡)"框的最强时刻，
+    而正文的数字来自用户请求的框 —— 于是出现"正文 16.3 m/s@10-15、图题 16.6 m/s@10-10"
+    这种图文打架（测试报告 P1 第 2 条）。现在图和字共用同一份切片与同一个数。
+    """
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import cartopy.crs as ccrs
+    from . import plotstyle
+    from . import ai_daily as _ad
+
+    st = (spec or {}).get("stats") or {}
+    uu = np.asarray(st.get("uu"), dtype=float)
+    vv = np.asarray(st.get("vv"), dtype=float)
+    latv = np.asarray(st.get("latv"), dtype=float).ravel()
+    lonv = np.asarray(st.get("lonv"), dtype=float).ravel()
+    if uu.ndim != 2 or vv.ndim != 2 or uu.shape != vv.shape:
+        return []
+    if uu.shape != (latv.size, lonv.size):
+        # 维度顺序不一致时（lat/lon 可能是辅助坐标）转一下
+        if uu.shape == (lonv.size, latv.size):
+            uu, vv = uu.T, vv.T
+        else:
+            return []
+    spd = np.sqrt(uu ** 2 + vv ** 2)
+    LON, LAT = np.meshgrid(lonv, latv)
+
+    pk = st.get("peak") or {}
+    max_spd = float(pk.get("speed_ms") or np.nanmax(spd))
+    t_utc = str(pk.get("time") or "")
+    t_label = str(pk.get("time_label") or _ad.wind_time_label(t_utc))
+    region = str((spec or {}).get("region") or ctx.request.get("region") or "关注海域")
+    typh = str(ctx.request.get("typhoon", "") or "")
+
+    # 取景：用本次统计的那个框（外扩一点），并夹到数据范围内
+    box = (spec or {}).get("box") or st.get("box")
+    extent = [float(lonv.min()), float(lonv.max()), float(latv.min()), float(latv.max())]
+    if box and len(box) == 4:
+        pad_lon = max(0.3, (float(box[1]) - float(box[0])) * 0.10)
+        pad_lat = max(0.3, (float(box[3]) - float(box[2])) * 0.10)
+        extent = [max(extent[0], float(box[0]) - pad_lon),
+                  min(extent[1], float(box[1]) + pad_lon),
+                  max(extent[2], float(box[2]) - pad_lat),
+                  min(extent[3], float(box[3]) + pad_lat)]
+    extent[0] = max(extent[0], 105.0)
+    extent[1] = min(extent[1], 138.0)
+    extent[2] = max(extent[2], 8.0)
+    extent[3] = min(extent[3], 38.0)
+    if extent[1] - extent[0] < 0.5 or extent[3] - extent[2] < 0.5:
+        extent = [float(lonv.min()), float(lonv.max()), float(latv.min()), float(latv.max())]
+
+    plotstyle.setup()
+    fig = plt.figure(figsize=(10.5, 7.8))
+    ax = plotstyle.map_axes(fig, [0.05, 0.06, 0.79, 0.86], extent)
+    pc = ax.pcolormesh(LON, LAT, spd, cmap="jet", vmin=0, vmax=25,
+                       shading="auto", zorder=2, transform=ccrs.PlateCarree())
+    plotstyle.add_colorbar(fig, ax, pc, "风速 (m/s)",
+                           [0, 5, 10, 15, 20, 25], shrink=0.85, pad=0.02)
+    iv = np.where((lonv >= extent[0]) & (lonv <= extent[1]))[0]
+    jv = np.where((latv >= extent[2]) & (latv <= extent[3]))[0]
+    n_vis = max(len(iv), len(jv), 1)
+    step = max(1, int(round(n_vis / 16.0)))
+    ax.quiver(LON[::step, ::step], LAT[::step, ::step],
+              uu[::step, ::step], vv[::step, ::step],
+              color="k", width=0.0022, scale=380, alpha=0.9, zorder=4,
+              transform=ccrs.PlateCarree())
+    plotstyle.add_wind_levels(ax, LON, LAT, spd, transform=ccrs.PlateCarree())
+
+    title = f"{typh}号台风 风场" if typh else f"{region} 风场"
+    if t_label:
+        title += f"　{t_label}"
+    title += f"　最大风速 {max_spd:.1f} m/s"
+    ax.set_title(title, fontsize=13, pad=8)
+    _mark_point(ax, ctx)
+    fp = OUT_DIR / f"wind_field_{tag}.png"
+    # 图上的数就是正文的数：写回结果，供简报/回复引用
+    ctx.results["wind_figure_facts"] = {
+        "file": str(fp.name),
+        "max_spd": round(max_spd, 1),
+        "time_utc": t_utc,
+        "time_label": t_label,
+        "box": list(box) if box else None,
+        "region": region,
+    }
+    return [plotstyle.save(fig, fp, dpi=150)]
+
+
 def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
     """风场图：风速填色 + 风向箭头。
 
-    时刻选择规则：
+    时刻选择规则（**优先**走 geo_stats 算好的 wind_spec，保证与正文同源）：
+      - 有 wind_spec（正常路径）→ 直接画它的"请求框内过程最强时刻"切片
       - 指定了日期(date) -> 取“该日期内”风速最强时刻
       - 未指定        -> 取“关注海域(台湾海峡/厦门周边)”风速最强时刻
     兼容结构：标准 ERA5 / MATLAB 转存 / 模式风场(wind_x,wind_y)；多文件自动遍历。
@@ -879,6 +983,18 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
+    # ⭐ 正常路径：geo_stats 已经把"框 + 峰值时刻切片 + 数字"都算好了，直接用，
+    #    这样图文不可能不一致（曾经图另选一个框的最强时刻 → 与正文数字打架）
+    _spec = ctx.results.get("wind_spec") or {}
+    _sp = _spec.get("stats") or {}
+    if _sp.get("uu") is not None and _sp.get("vv") is not None:
+        try:
+            _imgs = _draw_wind_from_spec(OUT_DIR, ctx, tag, _spec)
+            if _imgs:
+                return _imgs
+        except Exception as e:  # noqa: BLE001
+            print(f"[visualize] 按 wind_spec 画风场失败，回退默认绘制：{e}")
 
     paths = [p for p in (ctx.files.get("wind_files") or []) if p]
     if not paths:
@@ -1121,7 +1237,11 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
 
     title = f"{typh}号台风 风场" if typh else "风场"
     if tlabel:
-        title += f"　{tlabel} UTC"
+        try:
+            from . import ai_daily as _ad
+            title += f"　{_ad.wind_time_label(tlabel)}"
+        except Exception:
+            title += f"　{tlabel} UTC"
     title += f"　最大风速 {best['max_spd']:.1f} m/s"
     ax.set_title(title, fontsize=13, pad=8)
     _mark_point(ax, ctx)

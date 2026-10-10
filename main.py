@@ -90,22 +90,42 @@ def _clean_reply(text: str) -> str:
     """
     import re as _re
     t = llm.strip_brief_lines(text)
+    # ③ 万一模型把内部工具调用标记当正文吐出来（DSML 泄漏），这里再兜一层
+    try:
+        t = llm.strip_tool_leak(t)
+    except Exception:
+        pass
     t = _re.sub(r"(?<=\d)\s*[~～]\s*(?=\d)", "–", t)
     return t
 
 
-def _append_brief_line(text: str) -> str:
-    """把最近生成的简报以可点链接形式追加到回复（不经模型转述）。"""
+def _append_brief_line(text: str, started_at: float = 0.0) -> str:
+    """把**本轮**生成的简报以可点链接形式追加到回复（不经模型转述）。
+
+    started_at：本轮开始的时间戳（time.time()）。只有**修改时间晚于本轮开始时刻**、
+    且确实存在的简报才追加。
+    旧版的坑：只看"300 秒以内"这个窗口，于是上一轮（甚至几轮前）的简报会在后面
+    每一轮里反复挂出来——测试报告复测观察里第 7~11 轮都挂着第 6 轮的全场风暴潮简报。
+    """
     import time
     from pathlib import Path as _P
     from orchestrator import paths as _paths
     f = _paths.BRIEFS_DIR / ".last_brief"
     try:
-        p = _P(f.read_text(encoding="utf-8").strip())
+        txt = f.read_text(encoding="utf-8").strip()
     except Exception:
         return text
-    if not p.exists() or (time.time() - p.stat().st_mtime) > 300:
-        return text                      # 不是本轮生成的，不追加
+    if not txt:                           # 本轮没生成 Word（如风场专问）→ 不追加
+        return text
+    p = _P(txt)
+    if not p.exists():
+        return text
+    mtime = p.stat().st_mtime
+    if started_at:
+        if mtime < started_at - 1.0:      # 是本轮之前就存在的旧简报
+            return text
+    elif (time.time() - mtime) > 300:      # 兜底：没有起始时间戳时沿用旧的 5 分钟窗口
+        return text
     return (text + f"\n\n📄 本次正式简报：[{p.name}]"
             f"(/gradio_api/file={p.as_posix()})　点击打开")
 
@@ -163,6 +183,9 @@ def _respond(text, audio_path, history):
     yield _to_messages(interim_history), gr.update(value=""), None, interim_history
 
     # ② 真实处理（可能较慢：LLM 两次调用 + 编排引擎）
+    #    记下本轮开始的时刻：只有**本轮新生成**的简报才允许追加下载链接
+    import time as _time
+    _turn_started = _time.time()
     try:
         bot_text, images = llm.chat(text, [[u, b] for u, b in history])
     except Exception as exc:
@@ -177,7 +200,7 @@ def _respond(text, audio_path, history):
     except Exception:
         pass
     bot_text = _clean_reply(bot_text)
-    bot_text = _append_brief_line(bot_text)
+    bot_text = _append_brief_line(bot_text, _turn_started)
     if images or True:
         new_history = history + [[text, (bot_text, images or [])]]
     yield _to_messages(new_history), gr.skip(), gr.skip(), new_history

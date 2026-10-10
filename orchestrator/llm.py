@@ -200,6 +200,32 @@ SYSTEM_PROMPT = (
     "【数字纪律】增水值、浪高、警戒潮位、时间、站点名等所有数值一律**照抄工具返回结果**，"
     "不要改写、不要凭印象补数字（例如警戒潮位 373/393/413/433 就照抄这四位数）；"
     "工具没给的数值就不要写。"
+    # ===================== 测试报告（第二轮）点出的问题 ===================== #
+    "【正文里绝对不许出现工具调用标记】你的工具调用由系统处理；"
+    "**回复正文只写给人看的中文结论**，不许出现 <||DSML||tool_calls>、`invoke`、"
+    "`parameter name=`、JSON 参数块这类内部标记。要数据就正常调用 forecast_risk 工具。"
+    "【风场：文字必须与图题同源】工具返回的 `wind_figure` 就是那张风场图**图题上写着的**"
+    "数字（最大风速 + 时刻），`wind.stats` 是同一份统计（同一个框、同一个时刻）。"
+    "回复里报风场峰值/时刻时**必须与它完全一致**，一个字都不许改。"
+    "**风场数据的时间轴是世界时 UTC**：时间一律写成"
+    "“2026-10-14 07:00 UTC（北京时 15:00）”这种形式（`wind.stats` 里 time / time_bjt 都有），"
+    "**只写一个时刻会被当成北京时，差 8 小时**；也绝不许把图上的 10-14 说成别的日期。"
+    "【取数失败 ≠ 没有数据】工具返回里 `status` 若是 `data_access_error` / `auth_error` / "
+    "`timeout`，说明是**取数通道出问题**（例如课题数据库 FTP 返回 425、被动模式数据连接被拒），"
+    "必须照实说“这次没能从课题数据库取到数据（技术原因，不是没有这份数据）”，"
+    "并把 `error_detail`、`advice` 一并告诉用户。"
+    "**绝对不许说成“系统里没有这个站的数据”“数据尚未入库”“该站不在可查询范围”**。"
+    "只有 `status=no_data`（且没有任何失败记录）才是真的“没有这份数据”。"
+    "【不许下“无风险”的定论】工具返回的 `data_quality` 是**数据完整性**："
+    "只要 `data_quality.total_water` 为 false（站点总水位/天文潮没取到），"
+    "就**禁止**出现“不具备成灾条件”“全区无风险”“无风险”“不会海水倒灌”“不必撤离”"
+    "这类确定性说法，必须改用 `data_quality.required_wording` 的口径："
+    "“当前模型增水未达预警阈值；该结论只代表本系统模型结果，**不代表官方无风险**，"
+    "且需补齐总水位/天文潮/官方预警；是否停课、撤离须以政府部门正式发布的预警和决定为准”。"
+    "被问到“要不要停课/要不要撤离/是不是必须行动”时，一律分三层讲："
+    "① 模型与数据结果（照抄）② 基于数据的推断（明确标注是推断）③ 只能由政府作出的正式决定。"
+    "【站名带后缀照常识别】用户说“厦门站”“厦门港”“崇武站”“东山东港站”这类写法时，"
+    "照常填 region，系统会自动归一化到本站，不要追问、不要说识别不了。"
 )
 
 FORECAST_TOOL = {
@@ -466,6 +492,89 @@ def strip_brief_lines(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
+# --------------------------------------------------------------------------- #
+# 内部工具调用泄漏（DSML）防护
+#   现象（测试报告 P1 第 3 条）：复杂问题下模型把工具调用**当正文**吐出来
+#   （`<||DSML||tool_calls>` / `invoke name="forecast_risk"` …），
+#   那一轮既没有自然语言回答也没有图，业务同事只看到一堆乱码。
+#   处理：① 先从这段标记里**解析出真正的工具参数**并直接执行；
+#        ② 解析不到就带着"不许再输出工具标记"的强提示重问一次；
+#        ③ 无论如何最后都要把标记从回复里剥干净（兜底）。
+# --------------------------------------------------------------------------- #
+_LEAK_RE = re.compile(r"(?:<|｜|\|)+\s*\|*\s*DSML\s*\|*\s*(?:>|｜|\|)+", re.I)
+_LEAK_NAME_RE = re.compile(r"invoke\s+name\s*=\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?")
+_LEAK_PARAM_RE = re.compile(
+    r"parameter\s+name\s*=\s*[\"']([A-Za-z_][A-Za-z0-9_]*)[\"'][^>]*?>(.*?)</", re.S)
+# 我方真实可执行的工具名（解析出来别的名字就当解析失败）
+_KNOWN_TOOLS = ("forecast_risk", "query_options", "ftp_query", "ftp_sync")
+
+
+def has_tool_leak(text: str) -> bool:
+    """正文里是否混进了内部工具调用标记。"""
+    s = str(text or "")
+    if not s:
+        return False
+    if _LEAK_RE.search(s):
+        return True
+    return ("tool_calls" in s and ("DSML" in s or "invoke" in s))
+
+
+def parse_leaked_call(text: str) -> Dict[str, Any]:
+    """把泄漏出来的调用文本解析成 {"name":..., "arguments":{...}}；解析不到返回 {}。"""
+    s = str(text or "")
+    if not has_tool_leak(s):
+        return {}
+    m = _LEAK_NAME_RE.search(s)
+    if not m:
+        return {}
+    name = m.group(1)
+    if name not in _KNOWN_TOOLS:
+        return {}
+    args: Dict[str, Any] = {}
+    for k, v in _LEAK_PARAM_RE.findall(s):
+        args[k] = str(v).strip()
+    return {"name": name, "arguments": args}
+
+
+class _LeakedCall:
+    """把解析出来的调用伪装成 openai 的 tool_call 对象，复用 _run_tool。"""
+
+    def __init__(self, name: str, arguments: str) -> None:
+        self.id = "leaked-call-0"
+        self.type = "function"
+        self.function = type("F", (), {"name": name, "arguments": arguments})()
+
+
+def strip_tool_leak(text: str) -> str:
+    """把回复里所有工具调用标记剥掉（最后一道兜底，保证用户看不到内部标记）。"""
+    s = str(text or "")
+    if not s:
+        return s
+    # 先把"整段调用块"砍掉：从第一个 DSML 标记起，到最后一个 '>' 标记止，
+    # 中间全是标签和参数值（storm_surge / wind / 台湾海峡 之类），整块都不能给用户看
+    _idx = [m.start() for m in re.finditer(r"</?\|+\s*DSML", s, flags=re.I)]
+    if _idx:
+        _end = s.rfind(">")
+        if _end > _idx[0]:
+            s = s[: _idx[0]] + s[_end + 1:]
+    # 成对的标签（含 </||DSML||parameter> 这种带名字的闭合标签）
+    s = re.sub(r"</?\|+\s*DSML\s*\|+[^>]*>", "", s, flags=re.I)
+    s = re.sub(r"</?\|*\s*(?:DSML|tool_calls|function_calls)\s*\|*[A-Za-z_]*\s*>", "", s,
+               flags=re.I)
+    s = re.sub(r"<\|+\s*\|*\s*/?\s*[A-Za-z_]*\s*\|*\|+>", "", s, flags=re.I)
+    kept = []
+    for ln in s.splitlines():
+        low = ln.lower().strip().strip("\"'")
+        if ("dsml" in low or "tool_calls" in low
+                or low.startswith("invoke name=") or low.startswith("parameter name=")
+                or low.endswith("parameter>") or low.endswith("invoke>")
+                or low in ("</", "<|", "||>", "parameter", "invoke")):
+            continue
+        kept.append(ln)
+    out = "\n".join(kept)
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
 def _call_ftp(args: Dict[str, Any]) -> Dict[str, Any]:
     """执行 FTP 查询工具：列目录 或 关键字搜索。"""
     from . import ftp_client
@@ -608,7 +717,46 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
 
         # 未调工具：直接返回文本（追问、常识回答、预报结论都走这里）
         if not msg.tool_calls:
-            return msg.content or "（未生成回复，请重试）", images
+            _content = msg.content or ""
+            # ⭐ 模型把工具调用当正文吐出来了（DSML 泄漏）：
+            #    能解析就**替它执行**，然后强制走"带工具结果出最终文本"那一步；
+            #    解析不到就带强提示重问一次；无论哪种都不允许把标记给用户看。
+            if has_tool_leak(_content):
+                print("[llm] 检测到内部工具调用泄漏，转成真实调用/重试")
+                _parsed = parse_leaked_call(_content)
+                _clean = strip_tool_leak(_content)
+                if _parsed:
+                    _tc = _LeakedCall(_parsed["name"],
+                                      json.dumps(_parsed["arguments"], ensure_ascii=False))
+                    try:
+                        _res, _imgs = _run_tool(_tc, user_text=str(message))
+                    except Exception as exc:  # noqa: BLE001
+                        _res, _imgs = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, []
+                    if _imgs:
+                        images = _imgs
+                    # 按标准"assistant.tool_calls + tool 结果"补回上下文，
+                    # 这样最后一轮能基于真实结果写自然语言回答
+                    messages.append({
+                        "role": "assistant",
+                        "content": _clean or "",
+                        "tool_calls": [{
+                            "id": _tc.id,
+                            "type": "function",
+                            "function": {"name": _tc.function.name,
+                                         "arguments": _tc.function.arguments},
+                        }],
+                    })
+                    messages.append({"role": "tool", "tool_call_id": _tc.id,
+                                     "content": json.dumps(_res, ensure_ascii=False)})
+                    break            # 跳出循环 → 用真实结果生成最终自然语言回答
+                messages.append({"role": "assistant", "content": _clean or "（内部调用）"})
+                messages.append({"role": "user", "content": (
+                    "（系统提示：你刚才把内部工具调用标记当正文输出了，用户看到的是一堆乱码。"
+                    "请改用 forecast_risk / query_options 工具正常取数，"
+                    "然后用自然语言回答；**正文里绝对不要出现任何工具调用标记、"
+                    "标签名、参数名或 JSON 参数块**。）")})
+                continue
+            return strip_tool_leak(_content) or "（未生成回复，请重试）", images
 
         # 调了工具：手动构造 assistant 的 tool_calls 消息补回
         messages.append({
@@ -651,5 +799,7 @@ def chat(message: str, history: List[List[str]]) -> Tuple[str, List[str]]:
     # 轮数用尽：强制不带工具出最终文本，保证一定给用户一个回复
     resp = client.chat.completions.create(model=MODEL, messages=messages, timeout=120)
     _final = resp.choices[0].message.content or "（未生成回复，请重试）"
+    # 最后一层兜底：哪怕到这里还带着工具标记，也不许给用户看
+    _final = strip_tool_leak(_final) or "（未生成回复，请重试）"
     # 简报行只由 main.py 追加（此处不再补，避免出现两条）
     return _final, images

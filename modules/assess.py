@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import re
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -37,13 +38,51 @@ STATION_WARN_LEVELS = {
     "东山": {"blue": 255, "yellow": 265, "orange": 285, "red": 305, "datum": 495,
              "color": "255/265/285/305", "wm_color": "750/760/780/800"},
 }
-# 厦门站名带"厦门港"等别名
+# 厦门站名带"厦门港"等别名；后缀（站/港/海洋站/观测站…）统一归一化，
+# 避免"厦门站""崇武海洋站"这类写法查不到警戒潮位（测试报告第 6 条）
 STATION_NAME_MAP = {
-    "厦门": "厦门", "厦门港": "厦门", "厦门(XMN)": "厦门",
-    "东山东港": "东山", "东山东港(DSN)": "东山",
-    "崇武": "崇武", "崇武(CWU)": "崇武",
-    "晋江": "晋江", "晋江(JNJ)": "晋江",
+    "厦门": "厦门", "厦门港": "厦门", "厦门(XMN)": "厦门", "厦门站": "厦门",
+    "东山东港": "东山", "东山东港(DSN)": "东山", "东山": "东山", "东山站": "东山",
+    "崇武": "崇武", "崇武(CWU)": "崇武", "崇武站": "崇武",
+    "晋江": "晋江", "晋江(JNJ)": "晋江", "晋江站": "晋江",
 }
+
+# 站名里可以剥掉的后缀（按长度从长到短剥）
+_STATION_SUFFIXES = ("海洋观测站", "海洋站", "观测站", "潮位站", "验潮站", "水文站",
+                     "站点", "站", "港", "测站")
+_CODE_SUFFIX_RE = re.compile(r"[(（][A-Za-z]{2,4}[)）]\s*$")
+
+
+def normalize_station(name: str) -> str:
+    """把用户/上游给的站名归一到警戒潮位表的键（厦门/崇武/晋江/东山）。
+
+    "厦门站"→厦门，"厦门港"→厦门，"东山东港站"→东山，"崇武海洋站"→崇武，
+    "崇武(CWU)"→崇武；认不出来就原样返回（后续查表会自然落空，不会编数）。
+    """
+    s = str(name or "").strip()
+    if not s:
+        return s
+    if s in STATION_NAME_MAP:
+        return STATION_NAME_MAP[s]
+    base = _CODE_SUFFIX_RE.sub("", s).strip()
+    if base in STATION_NAME_MAP:
+        return STATION_NAME_MAP[base]
+    for _ in range(3):                     # 最多剥 3 层后缀
+        cut = False
+        for suf in _STATION_SUFFIXES:
+            if base.endswith(suf) and len(base) > len(suf):
+                base = base[: -len(suf)].strip()
+                cut = True
+                break
+        if not cut:
+            break
+        if base in STATION_NAME_MAP:
+            return STATION_NAME_MAP[base]
+    # 再退一步：包含关系（"厦门西海域"→厦门）
+    for k, v in STATION_NAME_MAP.items():
+        if k and k in base:
+            return v
+    return STATION_NAME_MAP.get(base, base)
 
 
 def judge(max_surge_cm: float) -> str:
@@ -72,8 +111,8 @@ def _data_range_text(ctx: ModuleContext, geo: dict) -> str:
 
 
 def _find_warn(station_name: str) -> Optional[dict]:
-    """按站名(含别名)找警戒潮位表。"""
-    key = STATION_NAME_MAP.get(station_name, station_name)
+    """按站名(含别名/后缀)找警戒潮位表。"""
+    key = normalize_station(station_name)
     return STATION_WARN_LEVELS.get(key) or STATION_WARN_LEVELS.get(station_name)
 
 
@@ -367,8 +406,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
     for s in sites:
         cm = s.get("max_surge_cm", 0.0)          # 该站的**最大增水**(cm)
         sname = s.get("name", "")
-        key = STATION_NAME_MAP.get(sname, sname)
-        warn = STATION_WARN_LEVELS.get(key) or STATION_WARN_LEVELS.get(sname)
+        warn = _find_warn(sname)
         if is_point and not warn:
             warn = None
         tt_s = tt_map.get(sname) or {}
@@ -460,6 +498,37 @@ def run(ctx: ModuleContext) -> ModuleContext:
             f"预警级别为{_warn_level_text(level)}。"
         )
 
+    # ---- 数据完整性门槛（测试报告 P2 第 5 条）----
+    #   站点总水位/天文潮/官方预警缺项时，**不允许**输出"不具备成灾条件""全区无风险"
+    #   这种确定性结论——只能讲"当前模型（增水）未达预警阈值"，并说清缺口。
+    have_total = bool(ftp_warn_sites)
+    try:
+        from . import ai_daily as _ad
+        _tide_date = str(_ad.latest_tide_date() or "")
+    except Exception:
+        _tide_date = ""
+    _gaps = []
+    if not have_total:
+        _gaps.append("站点总水位（天文潮+增水）本期未取到 → 倒灌风险无法按业务口径判级")
+    if not _tide_date:
+        _gaps.append("天文潮（潮位）产品未取到")
+    _gaps.append("官方预警信号（红/橙/黄/蓝）不在本系统数据内，须以官方发布为准")
+    data_completeness = {
+        "total_water": bool(have_total),
+        "tide_product_date": _tide_date,
+        "official_warning": False,
+        "gaps": _gaps,
+        # 只有"总水位 + 该站警戒潮位"都在，才允许下"无风险"级结论
+        "allow_none_risk_conclusion": bool(have_total),
+        "required_wording": (
+            "当前模型增水未达预警阈值；该结论只代表本系统模型结果，**不代表官方无风险**——"
+            "站点总水位/天文潮/官方预警尚未补齐，是否停课、撤离等须以政府部门"
+            "正式发布的预警和决定为准。"
+            if not have_total else
+            "站点总水位已按业务口径对照警戒潮位判级，结论依据较充分；"
+            "但是否停课、撤离等仍属政府部门正式决定。"),
+    }
+
     brief_data = {
         "template_type": "storm_surge_alert",
         "agency": "自然资源部厦门海洋预报台",
@@ -487,6 +556,9 @@ def run(ctx: ModuleContext) -> ModuleContext:
                "其基准面与警戒潮位的85黄零基准是否一致尚待核实，故判级结论具参照性。"
                if is_total_level and (geo.get("tide_total") or {}).get("points") else "")
             + "最终判级以厦门中心业务化运行结果为准。"
+            + ("" if have_total else
+               "本次未取到站点总水位（天文潮+增水）产品，结论只按风暴增水阈值分级，"
+               "**不能据此判断“无风险”**；是否停课、撤离须以政府部门正式预警与决定为准。")
             + (f"\n{point_note}" if point_note else "")
             + _extra_note(geo, ctx)
         ),
@@ -509,6 +581,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
         "point_desc": point_desc,
         "point_note": point_note,
         "brief_data": brief_data,
+        # ⭐ 数据完整性（模型据此决定能不能说"无风险/不具备成灾条件"）
+        "data_completeness": data_completeness,
     }
 
     # 海浪评估（若已统计）

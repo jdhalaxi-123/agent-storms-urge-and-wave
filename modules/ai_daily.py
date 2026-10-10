@@ -686,11 +686,55 @@ def load_wind(date: str = "", force: bool = False) -> Optional[Dict[str, Any]]:
     return info
 
 
-def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None) -> Dict[str, Any]:
+def _tstr(tv, i: int) -> str:
+    """时间轴第 i 个时次的字符串（YYYY-MM-DD HH:MM）。"""
+    try:
+        return str(tv[int(i)])[:16].replace("T", " ")
+    except Exception:
+        return ""
+
+
+def utc_to_bjt(s: str) -> str:
+    """世界时字符串 → 北京时字符串（+8 小时）。
+
+    课题三场的 nc 时间轴是**世界时 UTC**：其生成脚本用
+    `pd.to_datetime(..., utc=True)`，另有一行
+    `pred_time = pred_time_utc + timedelta(hours=8)  # 转换为北京时间`，
+    绘图轴也标 `时间 (UTC)`。业务上习惯说北京时，所以两个都给，
+    并且**文字、图题、简报必须用同一个串**（否则会出现"文字 10-15 12:00、
+    图上 10-10 10:00 UTC"这种图文打架，测试报告 P1 第 2 条）。
+    """
+    txt = str(s or "").strip().replace("T", " ")
+    if not txt:
+        return ""
+    try:
+        import datetime as _dt
+        t = _dt.datetime.strptime(txt[:16], "%Y-%m-%d %H:%M")
+        return (t + _dt.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return ""
+
+
+def wind_time_label(s_utc: str) -> str:
+    """统一时间写法：`2026-10-15 12:00 UTC（北京时 20:00）`。"""
+    s = str(s_utc or "").strip()
+    if not s:
+        return ""
+    b = utc_to_bjt(s)
+    return f"{s} UTC（北京时 {b[11:] if b else '—'}）"
+
+
+def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None,
+               keep_slice: bool = False) -> Dict[str, Any]:
     """读每日风场文件，算关键风力指标（判断"风有多大、影响哪儿"）。
 
     box = (lon_min, lon_max, lat_min, lat_max)；None 用整个文件覆盖范围。
     返回：峰值风速/位置/时间、区域平均峰值、6/8/10 级格点数、4 个站点的最大风。
+
+    keep_slice=True 时**同时返回峰值时刻的风场切片**（uu/vv/latv/lonv/peak_index）
+    与统一的时间串。出图直接画这个切片 —— 这样"文字里的数"和"图上的数"
+    一定是同一个框、同一个时刻算出来的。
+    （修测试报告 P1：文字报福建框 16.3 m/s@10-15，图上却画关注海域框的 16.6 m/s@10-10。）
     """
     import xarray as xr
 
@@ -748,10 +792,13 @@ def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None) -> Dict[str, A
             ks = int(np.nanargmax(s))
             stations[cn] = {
                 "speed_ms": round(float(s[ks]), 1),
-                "time": str(tv[ks])[:16] if tv is not None else "",
+                "time": _tstr(tv, ks),
+                "time_bjt": utc_to_bjt(_tstr(tv, ks)),
             }
 
-        return {
+        peak_t = _tstr(tv, k)
+        mean_txt = _tstr(tv, km)
+        out: Dict[str, Any] = {
             "box": list(box) if box else None,
             "peak": {
                 "speed_ms": round(peak_ms, 1),
@@ -759,10 +806,14 @@ def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None) -> Dict[str, A
                 "beaufort": beaufort(peak_ms),
                 "lon": round(float(lo[ii]), 3),
                 "lat": round(float(la[jj]), 3),
-                "time": str(tv[k])[:16] if tv is not None else "",
+                "time": peak_t,                      # 世界时
+                "time_bjt": utc_to_bjt(peak_t),      # 北京时
+                "time_label": wind_time_label(peak_t),
             },
+            "peak_index": int(k),
             "mean_peak_ms": round(float(mean_t[km]), 1),
-            "mean_peak_time": str(tv[km])[:16] if tv is not None else "",
+            "mean_peak_time": mean_txt,
+            "mean_peak_time_bjt": utc_to_bjt(mean_txt),
             "counts": {
                 "g6": int(np.nansum(flat >= 10.8)),
                 "g8": int(np.nansum(flat >= 17.2)),
@@ -773,9 +824,19 @@ def wind_stats(info: Dict[str, Any], box: Optional[tuple] = None) -> Dict[str, A
             "n_time": int(spd.shape[0]),
             "lon_range": [round(float(lo.min()), 2), round(float(lo.max()), 2)],
             "lat_range": [round(float(la.min()), 2), round(float(la.max()), 2)],
-            "start": str(tv[0])[:16] if tv is not None else "",
-            "end": str(tv[-1])[:16] if tv is not None else "",
+            "start": _tstr(tv, 0),
+            "end": _tstr(tv, -1),
+            "start_bjt": utc_to_bjt(_tstr(tv, 0)),
+            "end_bjt": utc_to_bjt(_tstr(tv, -1)),
+            "tz_note": "时间口径：世界时 UTC（北京时 = UTC + 8 小时）",
         }
+        if keep_slice:
+            # 峰值时刻的风场切片 —— 出图直接用它，保证"图文同源"
+            out["uu"] = u[k]
+            out["vv"] = v[k]
+            out["latv"] = la
+            out["lonv"] = lo
+        return out
     finally:
         try:
             ds.close()
