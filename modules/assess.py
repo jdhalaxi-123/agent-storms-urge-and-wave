@@ -380,12 +380,19 @@ def run(ctx: ModuleContext) -> ModuleContext:
         else:
             lv = judge_by_warn_level(cm, warn) if (is_total_level and warn) else judge(cm)
             judge_on = cm
+        # 判级用的量到底是"增水"还是"高潮位/总水位"——必须标出来，
+        # 否则会出现"22.8cm 标成高潮位、再和 373cm 警戒潮位比"的荒唐表（用户反馈第 1 条）
+        _metric = "高潮位" if (total_cm is not None and warn) else "增水"
         pt = s.get("peak_time", "")
         pd = s.get("peak_date", "")
         if tt_s.get("peak_dt"):
             pt = tt_s["peak_dt"].strftime("%m-%d %H:%M")
             pd = tt_s["peak_dt"].strftime("%Y-%m-%d")
-        if warn:
+        # ⭐ 阈值列必须是**判级真正用的那套标准**：
+        #   按增水分级判 → 写 30/50/80/120；按总水位对照警戒潮位判 → 才写警戒潮位四色值。
+        if _metric == "增水":
+            warn_text = "30/50/80/120(增水分级)"
+        elif warn:
             warn_text = warn["color"] + "(蓝/黄/橙/红)"
         elif is_point:
             warn_text = "30/50/80/120(增水分级)"
@@ -395,6 +402,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
             "station": sname,
             "date": pd,
             "time": pt,
+            "metric": _metric,
             "high_tide_cm": round(judge_on, 1),          # 用于判级的那个量
             "max_total_cm": round(total_cm, 1) if total_cm is not None else None,
             "max_surge_cm": round(cm, 1),
@@ -471,7 +479,10 @@ def run(ctx: ModuleContext) -> ModuleContext:
                else "「风暴增水分级」（蓝色30cm/黄色50cm/橙色80cm/红色120cm）；")
             + ("该点为任意采样点，无本站四色警戒潮位，故按风暴增水分级判定。"
                if is_point else
-               "表中警戒潮位为该站85黄零基准的四色警戒值。")
+               # 表里写的到底是"警戒潮位"还是"增水分级"，备注必须跟着一致
+               ("表中增水阈值即风暴增水分级（30/50/80/120cm）。"
+                if (stations and stations[0].get("metric") == "增水")
+                else "表中警戒潮位为该站85黄零基准的四色警戒值。"))
             + ("总水位取自数值场（潮驱动与风+潮驱动相减得增水、相加即总水位），"
                "其基准面与警戒潮位的85黄零基准是否一致尚待核实，故判级结论具参照性。"
                if is_total_level and (geo.get("tide_total") or {}).get("points") else "")
@@ -504,10 +515,13 @@ def run(ctx: ModuleContext) -> ModuleContext:
     wave = ctx.results.get("wave_stats", {}) or {}
     want_wave = str(ctx.request.get("disaster", "") or "") == "wave"
     if wave.get("status") == "ok":
-        wl = wave.get("level", "无")
+        hs = wave.get("max_hs_m", 0) or 0
+        # ⭐ 判级**一律按要写出来的那个数值重算**：有些取数路径（点名地点/沿海点采样）
+        #    构造的 wave_stats 里没有 level 字段，旧写法默认成"无"，
+        #    于是出现"4.7 米却判未达预警"这种自相矛盾（用户反馈第 3 条）。
+        wl = judge_wave_level(hs) if hs else (wave.get("level") or "无")
         wtext = "未达到预警阈值" if wl == "无" else f"{wl}预警"
         w_region = geo.get("point_name") or region
-        hs = wave.get("max_hs_m", 0) or 0
         ctx.results["assess"]["wave"] = {
             "max_hs_m": wave.get("max_hs_m"),
             "level": wl,

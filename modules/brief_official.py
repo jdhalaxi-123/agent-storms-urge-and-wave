@@ -206,7 +206,11 @@ def _table_stations(doc, data: Dict[str, Any]) -> None:
     rows = data.get("stations") or []
     if not rows:
         return
-    headers = ["站位", "日期", "时间", "高潮位(cm)", "警戒潮位(cm)", "预警级别"]
+    _metric = str((rows[0].get("metric") if rows else "") or "高潮位")
+    headers = ["站位", "日期", "时间",
+               "增水(cm)" if _metric == "增水" else "高潮位(cm)",
+               "增水阈值(cm)" if _metric == "增水" else "警戒潮位(cm)",
+               "预警级别"]
     t = doc.add_table(rows=1, cols=len(headers))
     t.style = "Table Grid"
     t.alignment = WD_TABLE_ALIGNMENT.CENTER

@@ -148,7 +148,11 @@ def _md_station_table(data: Dict[str, Any]) -> List[str]:
     stations = data.get("stations") or []
     if not stations:
         return []
-    lines = ["| 站位 | 日期 | 时间 | 高潮位(cm) | 警戒潮位(cm) | 预警级别 |", "| --- | --- | --- | --- | --- | --- |"]
+    _metric = str((stations[0].get("metric") if stations else "") or "高潮位")
+    _col4 = "增水(cm)" if _metric == "增水" else "高潮位(cm)"
+    _col5 = "增水阈值(cm)" if _metric == "增水" else "警戒潮位(cm)"
+    lines = [f"| 站位 | 日期 | 时间 | {_col4} | {_col5} | 预警级别 |",
+             "| --- | --- | --- | --- | --- | --- |"]
     for s in stations:
         # 把 700/720/740/760 等分级串成一个 "700(蓝)/720(黄)..." 展示
         warn = s.get("warn", "")
@@ -256,7 +260,11 @@ def _docx_station_table(doc, data: Dict[str, Any]) -> None:
     from docx.enum.table import WD_TABLE_ALIGNMENT
     from docx.shared import Pt
 
-    headers = ["站位", "日期", "时间", "高潮位(cm)", "警戒潮位(cm)", "预警级别"]
+    _metric = str((stations[0].get("metric") if stations else "") or "高潮位")
+    headers = ["站位", "日期", "时间",
+               "增水(cm)" if _metric == "增水" else "高潮位(cm)",
+               "增水阈值(cm)" if _metric == "增水" else "警戒潮位(cm)",
+               "预警级别"]
     table = doc.add_table(rows=1, cols=len(headers))
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
