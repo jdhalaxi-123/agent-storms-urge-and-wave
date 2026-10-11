@@ -175,7 +175,16 @@ def legacy_cache_paths(remote: str) -> List[Path]:
     """旧版（项目内 data/ftp_cache，扁平命名）里可能存在的同一文件。"""
     parts = [p for p in str(remote).strip("/").split("/") if p]
     safe = "__".join(parts).replace(":", "_").replace("*", "_").replace("?", "_")
-    return [LEGACY_CACHE_DIR / safe, LEGACY_CACHE_DIR / parts[-1]]
+    out = [LEGACY_CACHE_DIR / safe, LEGACY_CACHE_DIR / parts[-1]]
+    # 还有一处旧位置：cache/other/misc/<原文件名>（加目录前缀之前就是存这儿，
+    # 例如融合产品的 tide/wave 同名文件都落在这里）。找到且大小一致会被搬过去复用。
+    try:
+        out.append(CACHE_DIR / "other" / "misc" / parts[-1])
+        if len(parts) >= 2:
+            out.append(CACHE_DIR / "other" / "misc" / f"{parts[-2]}__{parts[-1]}")
+    except Exception:
+        pass
+    return out
 
 
 # --------------------------------------------------------------------------- #

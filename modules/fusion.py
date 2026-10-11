@@ -256,6 +256,60 @@ def _breaker_trip(remote: str) -> None:
     _breaker_write(d)
 
 
+def _stale_fallback(kind: str, fine: bool, typhoon: str = "") -> Optional[str]:
+    """取不到最新期时，退回**本地已缓存的最新一份**（会明确标注"非最新期"）。
+
+    课题库传输速率掉到 ~10KB/s 时，最新期几十 MB 根本下不来；
+    与其什么都看不到，不如把本地已有的那份拿出来用，并如实标明它的起报日。
+    """
+    import glob
+    from pathlib import Path as _P
+
+    from orchestrator import paths as _paths
+    cache = _paths.CACHE_DIR / "other" / "misc"
+    k = KINDS[kind]
+    dirs = {k["fine_dir"] if fine else k["kind_dir"],
+            k["kind_dir"] if fine else k["fine_dir"]}
+    names: List[str] = []
+    for d in dirs:
+        pats = [f"{d}__fusion_forecast_*_regular{'-H' if fine else ''}.nc",
+                f"{d}__fusion_*_regular{'-H' if fine else ''}.nc",
+                f"fusion_forecast_*_regular{'-H' if fine else ''}.nc"]   # 旧命名（无前缀）
+        if typhoon:
+            pats.append(f"{d}__fusion_{typhoon}_regular{'-H' if fine else ''}.nc")
+        for pat in pats:
+            names += glob.glob(str(cache / pat))
+    if not names:
+        return None
+
+    def _key(p: str) -> str:
+        m = re.search(r"(\d{8})", _P(p).name)
+        return m.group(1) if m else "00000000"
+
+    return sorted(set(names), key=_key)[-1]
+
+
+def _find_local_exact(kind: str, issue: str, fine: bool, typhoon: str = "") -> str:
+    """找**指定这一期**在本地的副本（新旧命名都找）。有就不必再下载几十 MB。"""
+    from pathlib import Path as _P
+
+    from orchestrator import paths as _paths
+    cache = _paths.CACHE_DIR / "other" / "misc"
+    k = KINDS[kind]
+    dirs = [(k["fine_dir"] if fine else k["kind_dir"]),
+            (k["kind_dir"] if fine else k["fine_dir"])]
+    base = ((f"fusion_{typhoon}_regular" if typhoon
+             else f"fusion_forecast_{issue}00_regular") + ("-H.nc" if fine else ".nc"))
+    for d in dirs:
+        for cand in (cache / f"{d}__{base}", cache / base):
+            try:
+                if cand.exists() and cand.stat().st_size > 0:
+                    return str(cand)
+            except Exception:
+                continue
+    return ""
+
+
 def load(kind: str, issue: str = "", fine: bool = False,
          typhoon: str = "") -> Optional[Dict[str, Any]]:
     """取并读取一份融合 nc。指定的网格没上传时**自动回退到另一种网格**。
@@ -303,14 +357,37 @@ def load(kind: str, issue: str = "", fine: bool = False,
     if key in _mem and now - _mem[key]["t"] < _TTL:
         return _mem[key]["v"]
 
-    if _breaker_open(remote):
-        print(f"[fusion] 该文件最近取数失败（熔断中），先跳过：{remote}")
-        return None
-    local = fc.fetch(remote, expected_size=size)
+    stale = False
+    local = None
+    # ⭐ 本地已有"这一期"的副本就直接用，不再去下载（课题库慢时这是关键：
+    #    否则每问一次水位都要先卡着下一个几十 MB 的文件）
+    _l0 = _find_local_exact(kind, issue, used_fine, typhoon)
+    if _l0:
+        try:
+            _sz = Path(_l0).stat().st_size
+        except Exception:
+            _sz = 0
+        local = _l0
+        stale = bool(size and _sz and abs(_sz - size) > max(1024, size * 0.05))
+        print(f"[fusion] 用本地已下载的同期副本（{'与远端大小不一致，标注为缓存副本' if stale else '与远端一致'}）：{_l0}")
+    if not local and _breaker_open(remote):
+        print(f"[fusion] 该文件最近取数失败（熔断中），改用本地缓存：{remote}")
+    elif not local:
+        local = fc.fetch(remote, expected_size=size)
+        if not local:
+            _breaker_trip(remote)
+            print(f"[fusion] 取数失败（已熔断 15 分钟）：{remote}")
     if not local:
-        _breaker_trip(remote)
-        print(f"[fusion] 取数失败，已熔断 15 分钟不再重试：{remote}")
-        return None
+        alt = _stale_fallback(kind, used_fine, typhoon)
+        if not alt:
+            return None
+        local, stale = alt, True
+        print(f"[fusion] 改用本地已缓存的一份（非最新期）：{alt}")
+    if stale:                       # 缓存键区分"新鲜/缓存副本"，别互相顶掉
+        key = f"{key}:stale"
+        now = __import__("time").time()
+        if key in _mem and now - _mem[key]["t"] < _TTL:
+            return _mem[key]["v"]
     ds = xr.open_dataset(local, decode_times=True)
     try:
         var = KINDS[kind]["var"]
@@ -328,17 +405,24 @@ def load(kind: str, issue: str = "", fine: bool = False,
             rng = np.nanmax(arr, axis=0) - np.nanmin(arr, axis=0)
         varying = np.isfinite(rng) & (rng > 0.05)
         attrs = {k: str(v)[:200] for k, v in ds.attrs.items()}
+        # 用本地旧期兜底时，起报日以**文件里的日期**为准（别写成最新期）
+        _issue = issue
+        if stale:
+            m2 = re.search(r"(\d{8})", str(local).rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
+            if m2:
+                _issue = m2.group(1)
         out = {
             "kind": kind, "var": var, "cn": KINDS[kind]["cn"], "unit": "m",
-            "issue": issue, "typhoon": typhoon, "fine": bool(used_fine),
+            "issue": _issue, "typhoon": typhoon, "fine": bool(used_fine),
             "remote": remote, "local": local,
+            "stale": bool(stale),                # True = 取不到最新期，用的本地缓存
             "lat": la, "lon": lo,
             "times": [str(t)[:19] for t in tv],
             "values": arr,                       # (t, lat, lon) 单位 m
             "varying": varying,                  # 随时间变化的格点
             "constant_ratio": round(float(1.0 - varying.sum() / max(rng.size, 1)), 3),
             "attrs": attrs,
-            "file": remote.rsplit("/", 1)[-1],
+            "file": str(local).rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
         }
         _mem[key] = {"t": now, "v": out}
         return out
@@ -488,5 +572,7 @@ def provenance(fld: Dict[str, Any]) -> str:
     head = (f"第五组融合产品（AI+数值模式融合）· {fld['cn']} · "
             f"{'台风个例 ' + fld['typhoon'] if fld.get('typhoon') else '起报 ' + fld['issue']} · "
             f"{grid}")
+    if fld.get("stale"):
+        head += "（**本地缓存副本**：与课题库最新一期未做比对/未重新下载）"
     return (f"{head}；基准：平均海平面；时间：UTC（括号内为北京时）；"
             f"数据来自 {fld.get('file', '')}")

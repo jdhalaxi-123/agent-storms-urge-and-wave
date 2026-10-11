@@ -502,6 +502,11 @@ def run(ctx: ModuleContext) -> ModuleContext:
     #   站点总水位/天文潮/官方预警缺项时，**不允许**输出"不具备成灾条件""全区无风险"
     #   这种确定性结论——只能讲"当前模型（增水）未达预警阈值"，并说清缺口。
     have_total = bool(ftp_warn_sites)
+    # ⭐ 第五组融合产品给了"总水位"（天文潮+增水，基准平均海平面）→ 也算有总水位，
+    #    否则会一边展示融合总水位、一边说"未取到总水位"（自相矛盾）
+    _fus_tide = (ctx.results.get("fusion") or {}).get("tide") or {}
+    if _fus_tide.get("point"):
+        have_total = True
     try:
         from . import ai_daily as _ad
         _tide_date = str(_ad.latest_tide_date() or "")
@@ -510,6 +515,9 @@ def run(ctx: ModuleContext) -> ModuleContext:
     _gaps = []
     if not have_total:
         _gaps.append("站点总水位（天文潮+增水）本期未取到 → 倒灌风险无法按业务口径判级")
+    elif _fus_tide.get("point"):
+        _gaps.append("总水位来自第五组融合产品（基准：平均海平面），与本站警戒潮位（85黄零）"
+                     "的口径一致性未做换算")
     if not _tide_date:
         _gaps.append("天文潮（潮位）产品未取到")
     _gaps.append("官方预警信号（红/橙/黄/蓝）不在本系统数据内，须以官方发布为准")
