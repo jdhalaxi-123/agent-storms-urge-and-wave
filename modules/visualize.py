@@ -293,6 +293,28 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 return disaster != "wave"
             return False
 
+        # ===== 第五组融合产品：总水位 / 有效波高（曲线 + 场图）=====
+        #   "目前先用融合后的数据"：挂了融合就出它的图，并**不再重复出 AI 版的同类图**
+        _fus = ctx.results.get("fusion") or {}
+        _fus_kinds = [k for k in ("tide", "wave") if _fus.get(k)]
+        if _fus_kinds:
+            try:
+                from . import viz_fusion
+                for _k in _fus_kinds:
+                    for _fn in (viz_fusion.curve, viz_fusion.field):
+                        try:
+                            _imgs, _note = _fn(OUT_DIR, ctx, tag, _k)
+                        except Exception as _e:  # noqa: BLE001
+                            print(f"[visualize] 融合{_k}出图失败({_fn.__name__}): {_e}")
+                            continue
+                        for _p in _imgs:
+                            images.append(_p)
+                            if _note:
+                                ctx.results.setdefault("image_notes", {})[_p] = _note
+                print(f"[visualize] 融合产品出图：{len(_fus_kinds)} 类")
+            except Exception as _e:  # noqa: BLE001
+                print(f"[visualize] 融合产品出图失败：{_e}")
+
         # ===== 场查询/区域预报：出区域分布图（风暴潮/海浪）=====
         # 注意：用户明确要别的图（如 wind 风场、surge_station 站点曲线）时，
         # 不要抢着画区域增水分布图——「问什么画什么」。
@@ -301,7 +323,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
                                            # 局地要动图但我们没有局地动图 → 给区域场图
                                            "gif", "animation", "动图", "动画",
                                            "wind_wave"))
-        if (field_ok and not _official
+        if (field_ok and not _official and "wave" not in _fus_kinds
                 and (ctx.request.get("field_query") or ctx.results.get("ai_field"))):
             fp = _draw_ai_field(OUT_DIR, ctx, tag)
             if fp:
@@ -313,7 +335,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
         #   · 「闽南的海浪场」这类要"场"的 → 只出自绘区域场图，不画曲线
         #   · 全场/浮标站号 → 用课题三成品（动图/单点图），不重复自绘
         if ((want("wave") or plot in ("gif", "animation", "动图", "动画", "wind_wave"))
-                and not _official and not ctx.request.get("field_query")):
+                and not _official and not ctx.request.get("field_query")
+                and "wave" not in _fus_kinds):
             geo_w = ctx.results.get("geo_stats", {}) or {}
             wsite = [s for s in (geo_w.get("sites") or []) if s.get("series_wave_m")]
             ws = ctx.results.get("wave_stats", {}) or {}

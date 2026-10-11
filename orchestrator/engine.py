@@ -22,6 +22,57 @@ def run(request: str) -> Dict[str, Any]:
     return run_with_slots(slots, raw=request)
 
 
+def _fusion_brief(fus: Dict[str, Any]) -> Dict[str, Any]:
+    """把融合产品的关键信息摘成一小块，供对话里如实说明（口径 + 数值 + 判级）。"""
+    out: Dict[str, Any] = {}
+    for kind, v in (fus or {}).items():
+        fld = v.get("field") or {}
+        d = v.get("point") or {}
+        item = {
+            "是什么": ("风暴潮总水位（天文潮+增水）" if kind == "tide" else "有效波高"),
+            "来源": "第五组融合产品（AI + 数值模式融合）",
+            "起报": fld.get("issue") or fld.get("typhoon"),
+            "网格": "福建中南部精细 0.0083°" if fld.get("fine") else "全场 0.05°",
+            "基准": "平均海平面",
+            "时间口径": "UTC（括号内为北京时）",
+            "覆盖时段": [str(fld.get("times", [""])[0])[:16].replace("T", " "),
+                         str(fld.get("times", [""])[-1])[:16].replace("T", " ")],
+            "取值点": v.get("name"),
+            "取值格点": [d.get("cell_lon"), d.get("cell_lat")],
+            "格点距站点_km": d.get("dist_km"),
+            "峰值": d.get("max_m"),
+            "峰值最低": d.get("min_m"),
+            "峰值时刻": d.get("peak_time"),
+            "峰值时刻北京时": d.get("peak_time_bjt"),
+            "文件": fld.get("file"),
+        }
+        if kind == "tide":
+            item["判级标准"] = "总水位对照该站四色警戒潮位（蓝/黄/橙/红）"
+            try:
+                from modules import assess
+                w = assess._find_warn(str(v.get("name") or ""))
+                if w:
+                    item["该站警戒潮位_cm"] = {k: w.get(k) for k in
+                                               ("blue", "yellow", "orange", "red")}
+                    item["判级"] = _lv(assess.judge_by_warn_level(float(d.get("max_m") or 0) * 100,
+                                                                  w))
+            except Exception:
+                pass
+        else:
+            item["判级标准"] = "海浪分级（蓝 2.5 / 黄 4.0 / 橙 6.0 / 红 9.0 m）"
+            try:
+                from modules import assess
+                item["判级"] = _lv(assess.judge_wave_level(float(d.get("max_m") or 0)))
+            except Exception:
+                pass
+        out[kind] = item
+    return out
+
+
+def _lv(x: str) -> str:
+    return "未达到预警阈值" if x == "无" else f"{x}预警"
+
+
 def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     """槽位入口：LLM 工具调用直接给结构化参数。"""
     # 每次查询开始清空"取数失败"记录：这样"本次查询有没有取数失败"是准确的，
@@ -122,6 +173,7 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                                   "tz_note": (_w.get("stats") or {}).get("tz_note"),
                                   } if _w else {}),
                         "wind_figure": ctx.results.get("wind_figure_facts") or None,
+                        "fusion": _fusion_brief(ctx.results.get("fusion") or {}),
                         "data_quality": (ctx.results.get("assess") or {}).get(
                             "data_completeness") or None,
                         "meta": ctx.meta,
@@ -179,7 +231,9 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     # ⭐ 兜底：站点/场/序列一个都没取到 → 如实说明并请用户给明确位置，
     #    绝不能继续硬编一份"简报"（曾出现"未知海域风暴潮风险简报…橙色预警"这类假结论）
     _g = ctx.results.get("geo_stats") or {}
-    if not (_g.get("sites") or _g.get("field_stats") or _g.get("series")):
+    # ⭐ 第五组融合产品也算"有数据"：只要挂上了融合总水位/浪高，就不走"没取到数据"分支
+    _fus_any = bool(ctx.results.get("fusion"))
+    if not (_g.get("sites") or _g.get("field_stats") or _g.get("series") or _fus_any):
         _r = str(slots.get("region") or "").strip()
         # ⭐ 先分清"这次没取上"和"确实没有这份数据"（测试报告 P1 第 4 条）：
         #    FTP 425/超时/认证失败时绝不能报成 no_data，否则业务同事会以为
@@ -270,6 +324,8 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                   "only_date": (wind.get("stats") or {}).get("only_date"),
                   } if wind else {}),
         "wind_figure": ctx.results.get("wind_figure_facts") or None,
+        # ⭐ 第五组融合产品（总水位 / 有效波高）：工具返回里带上，供模型如实说明口径
+        "fusion": _fusion_brief(ctx.results.get("fusion") or {}),
         # ⭐ 数据完整性（缺站点总水位/天文潮/官方预警时，不许下"无风险"级结论）
         "data_quality": (ctx.results.get("assess") or {}).get("data_completeness") or None,
         "meta": ctx.meta,

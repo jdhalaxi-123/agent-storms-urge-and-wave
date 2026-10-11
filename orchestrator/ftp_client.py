@@ -41,13 +41,13 @@ def ftp_config() -> dict:
     }
 
 
-def _connect(pasv: bool = True):
+def _connect(pasv: bool = True, timeout: float = 30.0):
     from ftplib import FTP
 
     c = ftp_config()
     ftp = FTP()
     try:
-        ftp.connect(c["host"], c["port"], timeout=30)
+        ftp.connect(c["host"], c["port"], timeout=timeout)
         ftp.login(c["user"], c["pass"])
     except Exception as e:  # noqa: BLE001
         note_error("connect", f"{type(e).__name__}: {e}")
@@ -302,12 +302,18 @@ def tree(path: str = "/", depth: int = 0, max_depth: int = 3) -> None:
         ftp.quit()
 
 
-def _download_once(remote: str, local: str, pasv: bool = True) -> None:
-    """一次下载尝试（失败直接抛异常，由 download() 决定重试）。"""
-    ftp = _connect(pasv=pasv)
+def _download_once(remote: str, local: str, pasv: bool = True,
+                   rest: int = 0, timeout: float = 30.0,
+                   blocksize: int = 262144) -> None:
+    """一次下载尝试（失败直接抛异常，由 download() 决定重试）。rest>0 时从断点续传。
+
+    blocksize 调大到 256 KB：课题库对小块传输效率很低，小块更容易"传一半停住"。
+    """
+    ftp = _connect(pasv=pasv, timeout=timeout)
     try:
-        with open(local, "wb") as f:
-            ftp.retrbinary(f"RETR {remote}", f.write)
+        mode = "ab" if rest else "wb"
+        with open(local, mode) as f:
+            ftp.retrbinary(f"RETR {remote}", f.write, blocksize=blocksize, rest=rest)
     finally:
         try:
             ftp.quit()
@@ -318,39 +324,96 @@ def _download_once(remote: str, local: str, pasv: bool = True) -> None:
                 pass
 
 
-def download(remote: str, local: str, retries: int = 2, quiet: bool = False) -> bool:
-    """下载单个文件。
+def _remote_size(remote: str, timeout: float = 20.0) -> int:
+    try:
+        ftp = _connect(timeout=timeout)
+    except Exception:
+        return 0
+    try:
+        try:
+            sz = ftp.size(remote)
+            if sz:
+                return int(sz)
+        except Exception:
+            pass
+        try:
+            from .ftp_catalog import _stat_size
+            return int(_stat_size(ftp, remote) or 0)
+        except Exception:
+            return 0
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            pass
 
-    ⭐ 会**重连重试**：课题数据库偶发 425（被动模式数据连接被拒）——
-    实测这类失败多数是瞬时/端口偶发，换一条连接重来就能成功。
-    第 1~2 次用被动模式（防火墙友好），最后一次退到主动模式碰一下运气。
-    失败原因会记进 note_error()，上层据此区分"没取上"和"没这份数据"。
+
+def download(remote: str, local: str, retries: int = 2, quiet: bool = False) -> bool:
+    """下载单个文件（**断点续传 + 重连重试**）。
+
+    课题库偶发两类问题，都在这里兜住：
+      ① 425（被动模式数据连接被拒）/ 瞬时失败 → 换新连接重来；
+      ② 大文件传到一半 stall（socket timeout）→ **用 REST 从断点续传**，
+         而不是从头再下（68 MB 从头下很容易反复失败）。
+    被动模式连不上时最后退到主动模式碰一次运气。
     """
     Path(local).parent.mkdir(parents=True, exist_ok=True)
-    plans = [True, True, False]            # 两次被动 + 一次主动
-    plans = plans[: max(1, int(retries) + 1)]
+    want = _remote_size(remote)
+    plans = [True, False, True][: max(1, int(retries) + 1)]   # 被动 / 主动 / 被动
+    pos = 0
     for i, pasv in enumerate(plans):
+        # 已下完（比远端小 1 KB 以内都算完整）
         try:
-            _download_once(remote, local, pasv=pasv)
-            if os.path.getsize(local) > 0:
-                if not quiet:
-                    print(f"下载完成: {remote} -> {local} ({os.path.getsize(local)}B)")
-                return True
-            note_error(f"download {remote}", "下载后文件为空")
+            if Path(local).exists():
+                pos = Path(local).stat().st_size
+        except Exception:
+            pos = 0
+        if want and pos >= want - 1024:
+            _rename_ok(local, quiet, remote)
+            return True
+        try:
+            _download_once(remote, local, pasv=pasv, rest=pos)
         except Exception as e:  # noqa: BLE001
-            note_error(f"download {remote}", f"{type(e).__name__}: {e}")
+            note_error(f"download {remote}",
+                       f"{type(e).__name__}: {e}（已传 {pos/1e6:.1f} MB"
+                       f"{'，将断点续传' if pos else ''}）")
             if not quiet:
-                print(f"下载失败（第 {i + 1}/{len(plans)} 次，"
-                      f"{'被动' if pasv else '主动'}模式）{remote}: {e}")
-        # 清掉半截文件，别让下一次误判成"已缓存"
+                print(f"下载中断（第 {i + 1}/{len(plans)} 次，"
+                      f"{'被动' if pasv else '主动'}模式，已传 {pos/1e6:.1f} MB）：{e}")
+        try:
+            if Path(local).exists() and Path(local).stat().st_size > 0:
+                pos = Path(local).stat().st_size
+        except Exception:
+            pos = 0
+        if want and pos >= want - 1024:
+            _rename_ok(local, quiet, remote)
+            return True
+        time.sleep(1.0)
+    # 收尾：比目标小太多就当失败（避免把半截文件当缓存用）
+    try:
+        got = Path(local).stat().st_size if Path(local).exists() else 0
+    except Exception:
+        got = 0
+    if want and got < want - 1024:
+        note_error(f"download {remote}", f"只下到 {got}B / 远端 {want}B")
         try:
             if Path(local).exists():
                 Path(local).unlink()
         except Exception:
             pass
-        if i + 1 < len(plans):
-            time.sleep(0.8 * (i + 1))
-    return False
+        return False
+    if got <= 0:
+        return False
+    _rename_ok(local, quiet, remote)
+    return True
+
+
+def _rename_ok(local: str, quiet: bool, remote: str) -> None:
+    try:
+        if not quiet:
+            print(f"下载完成: {remote} -> {local} ({os.path.getsize(local)}B)")
+    except Exception:
+        pass
 
 
 def sync_dir(remote_dir: str, local_dir: str = "", keyword: str = "", max_files: int = 20) -> dict:

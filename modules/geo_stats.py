@@ -1357,6 +1357,100 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
     return geo
 
 
+def _wants_fusion(ctx: ModuleContext) -> list:
+    """这一问要不要用第五组融合产品？返回要挂的 kind 列表（tide / wave）。
+
+    规则（"目前先用融合后的数据"）：
+      - 问**水位/潮位/总水位/倒灌/警戒** → tide（融合的总水位 = 天文潮+增水）
+      - 问**浪/波高/海浪**（或灾种=wave）    → wave（融合的有效波高）
+      - 用户原话里出现"融合" → 两个都挂
+    （问"增水"不挂 tide：融合产品里没有单独的增水变量，增水仍用课题三 AI 单点。）
+    """
+    raw = str(ctx.request.get("raw", "") or "")
+    dis = str(ctx.request.get("disaster", "") or "")
+    plot = str(ctx.request.get("plot", "") or "").strip().lower()
+    kk: list = []
+    if any(k in raw for k in ("融合", "fusion")):
+        kk = ["tide", "wave"]
+    else:
+        if (any(k in raw for k in ("水位", "潮位", "总水位", "倒灌", "警戒"))
+                or plot in ("tide", "water_level", "total_water")):
+            kk.append("tide")
+        if (dis == "wave" or any(k in raw for k in ("浪", "波高", "海浪"))
+                or plot in ("wave", "wave_field", "wave_station")):
+            kk.append("wave")
+    # 增水专问：不掺总水位（避免"问增水给水位"）
+    if "增水" in raw and not any(k in raw for k in ("水位", "潮位", "倒灌", "警戒")):
+        kk = [k for k in kk if k != "tide"]
+    return kk
+
+
+def _attach_fusion(ctx: ModuleContext) -> None:
+    """按需挂上第五组融合产品（总水位 / 有效波高）：场 + 站点/任意点序列。"""
+    try:
+        from . import fusion as F
+        from orchestrator import geo_domain as _gd
+    except Exception as e:  # noqa: BLE001
+        print(f"[geo_stats] 融合模块不可用：{e}")
+        return
+
+    kinds = _wants_fusion(ctx)
+    if not kinds:
+        return
+    out = ctx.results.setdefault("fusion", {})
+    # 目标点
+    name = str(ctx.request.get("region", "") or "")
+    _n, coord = _gd.locate(name)
+    pt = ctx.request.get("point")
+    if pt:
+        try:
+            coord = (float(pt[0]), float(pt[1]))
+        except Exception:
+            pass
+    if coord:
+        lon, lat = float(coord[0]), float(coord[1])
+    else:
+        lon, lat = 118.25, 24.50                 # 兜底：厦门
+
+    want_date = ""
+    try:
+        td = _parse_target_date(ctx.request.get("date", ""))
+        if td is not None:
+            d8 = td.strftime("%Y%m%d")
+            if d8.startswith("2000"):            # 月日占位年份 → 用最新期的年份
+                d8 = (F.latest_issue(kinds[0]) or "")[:4] + d8[4:]
+            want_date = d8
+    except Exception:
+        want_date = ""
+
+    for kind in kinds:
+        try:
+            # 只有用户点名了日期才去列目录核对该日期在不在（列目录在课题库不稳时很慢）
+            issue = ""
+            if want_date:
+                issue = want_date if want_date in F.list_issues(kind) else ""
+            fine = (kind == "wave")              # 浪高优先用精细网格；水位目前只有全场
+            fld = F.load(kind, issue=issue, fine=fine)
+            if not fld:
+                fld = F.load(kind, issue=issue, fine=not fine)
+            if not fld:
+                print(f"[geo_stats] 融合 {kind} 取数失败（可能还没上传）")
+                continue
+            d = F.point(fld, lon, lat)
+            if not d:
+                print(f"[geo_stats] 融合 {kind} 取点失败")
+                continue
+            out[kind] = {"field": fld, "point": d, "name": (_n or name or "目标点"),
+                         "provenance": F.provenance(fld)}
+            print(f"[geo_stats] 融合 {kind}：{fld['file']}（起报 {fld['issue']}，"
+                  f"{'精细' if fld['fine'] else '全场'}）→ 格点 "
+                  f"{d['cell_lon']:.3f}E/{d['cell_lat']:.3f}N 峰值 {d['max_m']} m")
+        except Exception as e:  # noqa: BLE001
+            print(f"[geo_stats] 融合 {kind} 处理失败：{type(e).__name__}: {e}")
+    if not out:
+        ctx.results.pop("fusion", None)
+
+
 def run(ctx: ModuleContext) -> ModuleContext:
     region = ctx.request.get("region", "未知海域")
     ftp_ty = ctx.files.get("ftp_typhoon")
@@ -1372,6 +1466,14 @@ def run(ctx: ModuleContext) -> ModuleContext:
             _attach_daily_wind(ctx, target_date)
         except Exception as e:  # noqa: BLE001
             print(f"[geo_stats] 每日风场取数失败: {e}")
+
+    # ⭐ 第五组融合产品（总水位 / 有效波高）：用户问水位、潮位、浪高时挂上，
+    #    出图与简报直接用它的数据（"目前先用融合后的数据"）
+    if not ftp_ty:
+        try:
+            _attach_fusion(ctx)
+        except Exception as e:  # noqa: BLE001
+            print(f"[geo_stats] 融合产品取数失败: {e}")
 
     # ⭐⭐⭐ 场查询（区域性问题）：大范围地名 → 出场分布 + 空间统计
     if ctx.request.get("field_query"):
@@ -2142,8 +2244,11 @@ def attach_requested_tables(ctx) -> None:
             print(f"[geo_stats] 已按请求窗口生成表："
                   f"{ {k: v['window'] for k, v in tables.items()} }")
         # ⭐ 用户问"潮位"，但对方天文潮产品没更新到这天 → 如实说明，别拿增水顶
+        #    若已经挂了第五组融合总水位，则改口径：水位用融合总水位（含天文潮），
+        #    不再说"给不了潮位"（那条只针对课题三那套停更的天文潮产品）。
         _raw_l = str(ctx.request.get("raw", "") or "")
-        if ("潮位" in _raw_l) and not any("天文潮" in k for k in tables):
+        _has_fus_tide = bool((ctx.results.get("fusion") or {}).get("tide"))
+        if ("潮位" in _raw_l) and not any("天文潮" in k for k in tables) and not _has_fus_tide:
             try:
                 from . import ai_daily as _ad
                 _td = _ad.latest_tide_date()
@@ -2154,6 +2259,13 @@ def attach_requested_tables(ctx) -> None:
                 f"{(f'{_td[:4]}-{_td[4:6]}-{_td[6:]}' if _td else '（无）')}，"
                 "此后没有更新，因此**无法给出该日期的逐时潮位**；"
                 "下面表中给出的是**风暴增水**（不是潮位），请勿混用。"
+            )
+        elif _has_fus_tide and "潮位" in _raw_l:
+            notes.append(
+                "**水位（含天文潮）用第五组融合产品的「总水位」**（= 天文潮 + 增水，"
+                "基准：平均海平面，时间 UTC）；课题三那套「天文潮(潮位)」产品自 "
+                "2026-07-08 后已停更。表中的**风暴增水**是另一路（课题三 AI 单点），"
+                "两个量不要混着看。"
             )
         if notes or why:
             ctx.results["window_note"] = " ".join(notes + ([why] if why else []))

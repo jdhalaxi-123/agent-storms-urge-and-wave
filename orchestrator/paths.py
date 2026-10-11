@@ -152,6 +152,13 @@ def cache_path_for(remote: str) -> Path:
     if name in ("output_0.nc", "output_4.nc"):
         parent = remote.rstrip("/").split("/")[-2]
         name = f"{parent}__{name}"
+    # 第五组融合产品：tide 与 wave 的文件名**完全一样**
+    #   /group5/fusion_df/low_tide/fusion_forecast_2026100900_regular.nc
+    #   /group5/fusion_df/low_wave/fusion_forecast_2026100900_regular.nc
+    # 只按文件名缓存会互相覆盖（每次都重下 60~70 MB），所以用上级目录名做前缀。
+    if "/fusion" in remote and name.startswith("fusion"):
+        parent = remote.rstrip("/").split("/")[-2]
+        name = f"{parent}__{name}"
 
     cat = category_of(remote)
     ty = _typhoon_of(remote)

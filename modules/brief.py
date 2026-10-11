@@ -93,6 +93,79 @@ def _wind_markdown(ctx: ModuleContext, wind: Dict[str, Any],
     return "\n".join(L)
 
 
+def _fusion_markdown(ctx: ModuleContext, fus: Dict[str, Any]) -> str:
+    """第五组融合产品小节：总水位 / 有效波高（含量值、时刻、判级、口径）。"""
+    L: List[str] = []
+    for kind in ("tide", "wave"):
+        v = fus.get(kind) or {}
+        fld = v.get("field") or {}
+        d = v.get("point") or {}
+        if not fld or not d:
+            continue
+        name = v.get("name") or ctx.request.get("region") or "目标点"
+        if kind == "tide":
+            L += [f"## {name} 风暴潮总水位（第五组融合产品）", ""]
+            L.append(f"- **过程最高总水位 {d.get('max_m')} m（{(d.get('max_m') or 0)*100:.0f} cm）**"
+                     f"，最低 {d.get('min_m')} m，变幅 {d.get('range_m')} m")
+            L.append(f"- 最高出现在 {_ft(d.get('peak_time'))} UTC"
+                     f"（北京时 {(d.get('peak_time_bjt') or '')[11:]}）")
+            try:
+                from . import assess
+                w = assess._find_warn(name)
+                if w:
+                    lv = assess.judge_by_warn_level(float(d.get("max_m") or 0) * 100.0, w)
+                    L.append(f"- **判级（总水位对照该站四色警戒潮位）："
+                             f"{'未达到预警阈值' if lv == '无' else lv + '警戒'}**；"
+                             f"该站警戒潮位 蓝{w.get('blue')}/黄{w.get('yellow')}/"
+                             f"橙{w.get('orange')}/红{w.get('red')} cm")
+                else:
+                    L.append("- 该点没有本站四色警戒潮位，未做分级")
+            except Exception:
+                pass
+        else:
+            L += [f"## {name} 有效波高（第五组融合产品）", ""]
+            L.append(f"- **过程最大有效波高 {d.get('max_m')} m**，最低 {d.get('min_m')} m")
+            L.append(f"- 最大出现在 {_ft(d.get('peak_time'))} UTC"
+                     f"（北京时 {(d.get('peak_time_bjt') or '')[11:]}）")
+            try:
+                from . import assess
+                lv = assess.judge_wave_level(float(d.get("max_m") or 0))
+                L.append(f"- **判级（海浪分级）：{'未达到预警级别' if lv == '无' else lv + '预警'}**"
+                         "（蓝 2.5 / 黄 4.0 / 橙 6.0 / 红 9.0 m）")
+            except Exception:
+                pass
+        L.append(f"- 取值格点 {d.get('cell_lon')}°E, {d.get('cell_lat')}°N"
+                 f"（距站点约 {d.get('dist_km')} km，"
+                 f"{'随时间变化' if d.get('varied') else '该格点变化很小'}）")
+        L.append(f"- 口径：第五组融合产品（AI + 数值模式融合），"
+                 f"{'福建中南部精细 0.0083°' if fld.get('fine') else '全场 0.05°'}；"
+                 f"起报 {fld.get('issue')}；覆盖 {_ft((fld.get('times') or [''])[0])} ~ "
+                 f"{_ft((fld.get('times') or [''])[-1])} UTC；"
+                 f"基准：平均海平面；时间：UTC（括号内为北京时）；文件 {fld.get('file')}")
+        L.append("")
+    if L:
+        L.append("> 说明：融合产品中约 30~45% 的格点为“常数源”（整段几乎不变），"
+                 "取点时已优先挑选随时间变化的格点；上面已注明所用格点与到站距离。")
+    return "\n".join(L)
+
+
+def _ft(s: Any) -> str:
+    return str(s or "")[:16].replace("T", " ")
+
+
+def _with_fusion(ctx: ModuleContext, markdown: str) -> str:
+    """在简报正文后追加"第五组融合产品"小节（挂了才加）。"""
+    fus = ctx.results.get("fusion") or {}
+    if not fus:
+        return markdown
+    try:
+        add = _fusion_markdown(ctx, fus)
+    except Exception as e:  # noqa: BLE001
+        print(f"[brief] 融合小节生成失败：{e}")
+        return markdown
+    return (markdown or "") + ("\n\n" + add if add else "")
+
+
 def run(ctx: ModuleContext) -> ModuleContext:
     request = ctx.request or {}
     assess = ctx.results.get("assess", {}) or {}
@@ -131,7 +204,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         except Exception:
             pass
         ctx.results["brief"] = {
-            "markdown": markdown,
+            "markdown": _with_fusion(ctx, markdown),
             "docx_path": docx_path,
             "template": data.get("template_type", "storm_surge_alert"),
             "status": "template",
@@ -149,7 +222,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         f"- 结论：{assess.get('risk', '未评估')}\n"
     )
     ctx.results["brief"] = {
-        "markdown": markdown,
+        "markdown": _with_fusion(ctx, markdown),
         "docx_path": None,
         "template": "fallback",
         "status": "fallback",
