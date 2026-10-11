@@ -200,19 +200,60 @@ def _find_entry(kind: str, issue: str, fine: bool, typhoon: str = "") -> Tuple[s
 
 
 _FAIL_TTL = 900.0            # 某个文件下载失败后，15 分钟内不再重试（熔断）
+_BREAKER_FILE = None         # 落盘位置（跨进程生效，避免每次重启后第一次又卡几分钟）
+
+
+def _breaker_path():
+    global _BREAKER_FILE
+    if _BREAKER_FILE is None:
+        try:
+            from orchestrator import paths as _p
+            _BREAKER_FILE = _p.CACHE_DIR / ".fusion_breaker.json"
+        except Exception:
+            _BREAKER_FILE = False
+    return _BREAKER_FILE
+
+
+def _breaker_read() -> Dict[str, float]:
+    import json
+    p = _breaker_path()
+    if not p:
+        return {}
+    try:
+        return {str(k): float(v) for k, v in json.loads(p.read_text(encoding="utf-8")).items()}
+    except Exception:
+        return {}
+
+
+def _breaker_write(d: Dict[str, float]) -> None:
+    import json
+    p = _breaker_path()
+    if not p:
+        return
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _breaker_open(remote: str) -> bool:
     import time as _t
-    v = _mem.get(f"fail:{remote}") or {}
-    if v and _t.time() - float(v.get("t") or 0) < _FAIL_TTL:
+    d = _breaker_read()
+    ts = float(d.get(remote) or 0)
+    if ts and _t.time() - ts < _FAIL_TTL:
         return True
+    if ts:
+        d.pop(remote, None)
+        _breaker_write(d)
     return False
 
 
 def _breaker_trip(remote: str) -> None:
     import time as _t
-    _mem[f"fail:{remote}"] = {"t": _t.time()}
+    d = _breaker_read()
+    d[remote] = _t.time()
+    _breaker_write(d)
 
 
 def load(kind: str, issue: str = "", fine: bool = False,
