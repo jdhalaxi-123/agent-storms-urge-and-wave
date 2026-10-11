@@ -388,7 +388,28 @@ def load(kind: str, issue: str = "", fine: bool = False,
         now = __import__("time").time()
         if key in _mem and now - _mem[key]["t"] < _TTL:
             return _mem[key]["v"]
-    ds = xr.open_dataset(local, decode_times=True)
+    ds = None
+    for _attempt in (1, 2):
+        try:
+            ds = xr.open_dataset(local, decode_times=True)
+            break
+        except Exception as e:  # noqa: BLE001
+            print(f"[fusion] 本地文件读不开（可能上次被中断留下半截）：{local} → {e}")
+            try:
+                from pathlib import Path as _P
+                _P(local).unlink()
+                print("[fusion] 已删除该损坏文件")
+            except Exception:
+                pass
+            if _attempt == 2:
+                return None
+            alt = _stale_fallback(kind, used_fine, typhoon)
+            if not alt:
+                return None
+            local, stale = alt, True
+            print(f"[fusion] 换用另一份本地缓存：{alt}")
+    if ds is None:
+        return None
     try:
         var = KINDS[kind]["var"]
         if var not in ds.variables:
