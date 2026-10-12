@@ -596,6 +596,24 @@ def run(ctx: ModuleContext) -> ModuleContext:
     # 海浪评估（若已统计）
     wave = ctx.results.get("wave_stats", {}) or {}
     want_wave = str(ctx.request.get("disaster", "") or "") == "wave"
+    # ⭐ 若本轮挂了第五组融合浪高 → **以融合为主口径**（与简报里的融合小节一致），
+    #    否则会出现"正文按课题三 AI 浪场说 3.6 m→蓝色预警、融合小节说 1.53 m→未达到"
+    #    这种同一条回复里两套数打架（补充测试报告点出的判级不一致）。
+    _fusw = (ctx.results.get("fusion") or {}).get("wave") or {}
+    _fwp = _fusw.get("point") or {}
+    if _fwp.get("max_m") is not None:
+        wave = dict(wave)
+        wave["status"] = "ok"
+        wave["max_hs_m"] = _fwp.get("max_m")
+        wave["peak_time"] = (f"{( _fwp.get('peak_time') or '')[5:16]} UTC"
+                            if _fwp.get("peak_time") else wave.get("peak_time"))
+        wave["source"] = ("第五组融合产品（AI+数值模式融合）· 有效波高 · "
+                          f"起报 {(_fusw.get('field') or {}).get('issue')} · "
+                          f"{'精细 0.0083°' if (_fusw.get('field') or {}).get('fine') else '全场 0.05°'} · "
+                          f"格点 {_fwp.get('cell_lon')}°E/{_fwp.get('cell_lat')}°N"
+                          f"（距 {_fwp.get('dist_km')} km）")
+        wave["fusion"] = True
+        ctx.results["wave_stats"] = wave
     if wave.get("status") == "ok":
         hs = wave.get("max_hs_m", 0) or 0
         # ⭐ 判级**一律按要写出来的那个数值重算**：有些取数路径（点名地点/沿海点采样）
@@ -633,7 +651,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
             note_lines = [
                 f"注：本简报为海浪预报，判级标准为「有效波高分级」"
                 f"（蓝色2.5m / 黄色4.0m / 橙色6.0m / 红色9.0m）；"
-                f"浪高数据取自 {wsrc}（{os.path.basename(str(wave.get('file') or ''))}）。"
+                f"浪高数据取自 {wsrc}。"
             ]
             if wst:
                 note_lines.append(

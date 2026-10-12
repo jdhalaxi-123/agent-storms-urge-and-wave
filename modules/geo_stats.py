@@ -1271,6 +1271,13 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
                            f"{pt_lon:.2f}°E, {pt_lat:.2f}°N，距 {dist_km:.0f} km，"
                            f"网格约 35×26 km）"),
                 "point_name": lb,
+                # ⭐ 检验样本：本系统只在台风个例上做过预报-实测对照，
+                #    任意地点没有逐点检验结果 → 如实写"暂无"，不要暗示有误差统计
+                "verification": ("暂无逐点检验样本（本系统仅在数据完整的台风个例上做过"
+                                 "预报-实测对照）"),
+                "product": "课题三 每日人工智能预报（AI 海浪场）",
+                "issue_time": (start.strftime("%Y-%m-%d %H:%M") if start else ""),
+                "grid_res": "约 0.352°×0.238°（35×26 km）",
             }
         if start and len(series):
             geo["data_start"] = start.strftime("%Y-%m-%d %H:%M")
@@ -1373,14 +1380,16 @@ def _wants_fusion(ctx: ModuleContext) -> list:
     if any(k in raw for k in ("融合", "fusion")):
         kk = ["tide", "wave"]
     else:
-        if (any(k in raw for k in ("水位", "潮位", "总水位", "倒灌", "警戒"))
-                or plot in ("tide", "water_level", "total_water")):
+        # 风暴潮类问题（除"只问增水"外）也挂融合总水位：总水位才是判"漫堤/倒灌"的量
+        if (any(k in raw for k in ("水位", "潮位", "总水位", "倒灌", "警戒", "漫堤", "风暴潮"))
+                or plot in ("tide", "water_level", "total_water")
+                or dis == "storm_surge"):
             kk.append("tide")
         if (dis == "wave" or any(k in raw for k in ("浪", "波高", "海浪"))
                 or plot in ("wave", "wave_field", "wave_station")):
             kk.append("wave")
     # 增水专问：不掺总水位（避免"问增水给水位"）
-    if "增水" in raw and not any(k in raw for k in ("水位", "潮位", "倒灌", "警戒")):
+    if "增水" in raw and not any(k in raw for k in ("水位", "潮位", "倒灌", "警戒", "漫堤")):
         kk = [k for k in kk if k != "tide"]
     return kk
 

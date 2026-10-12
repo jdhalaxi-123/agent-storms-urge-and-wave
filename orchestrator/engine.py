@@ -73,6 +73,28 @@ def _lv(x: str) -> str:
     return "未达到预警阈值" if x == "无" else f"{x}预警"
 
 
+def _output_switches(slots: Dict[str, Any], raw: str = "") -> None:
+    """解析"输出控制"指令：要不要 Word 简报 / 要不要图片（两个独立开关）。
+
+    测试反馈：用户明确说"不用生成图片和简报""要图但不要 Word"，系统仍生成并附上
+    .docx 链接。这里在**流程早期**解析出来，交给 brief / visualize 执行。
+
+    用"否定词 + 若干字内出现 图/简报"的窗口匹配，兼容"不用生成图片和简报""不要 Word
+    简报""不看图"这类各种语序。
+    """
+    import re as _re
+    t = str(raw or slots.get("raw", "") or "").replace(" ", "")
+    low = t.lower()
+    _neg = r"(?:不要|不用|不需要|无需|不能|不可以|别|请勿|不必)"
+    _gap = r"[^。；;，,、]{0,8}?"
+    no_figs = bool(_re.search(_neg + _gap + r"(?:图|图片|插图|图表|配图|图形)", low))
+    no_brief = bool(_re.search(_neg + _gap + r"(?:简报|word|文档|报告|docx)", low))
+    if no_brief:
+        slots["no_brief"] = True
+    if no_figs:
+        slots["no_figs"] = True
+
+
 def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     """槽位入口：LLM 工具调用直接给结构化参数。"""
     # 每次查询开始清空"取数失败"记录：这样"本次查询有没有取数失败"是准确的，
@@ -98,9 +120,11 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
             slots.pop("point", None)
             slots.pop("point_name", None)
 
+    # 输出控制开关（不要简报 / 不要图片）——必须在最前面解析，早于任何生成动作
+    _output_switches(slots, raw)
+
     # 覆盖范围校验：超出范围不展示任何数据，只返回文字说明
-    region = slots.get("region", "")
-    # ⭐ 海浪单点的**浮标站号**（C6W10 / 46694A …）不是地名，别当坐标解析后误判出界
+    region = slots.get("region", "")    # ⭐ 海浪单点的**浮标站号**（C6W10 / 46694A …）不是地名，别当坐标解析后误判出界
     chk = ({"ok": True, "matched": region, "buoy_code": True}
            if geo_domain.is_buoy_code(region)
            else geo_domain.check_region(region, slots.get("lon"), slots.get("lat")))
@@ -173,6 +197,15 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                                   "tz_note": (_w.get("stats") or {}).get("tz_note"),
                                   } if _w else {}),
                         "wind_figure": ctx.results.get("wind_figure_facts") or None,
+                        "output_control": {
+                            "no_brief": bool(slots.get("no_brief")),
+                            "no_figs": bool(slots.get("no_figs")),
+                            "images_skipped": bool(
+                                (ctx.results.get("visualize") or {}).get("skipped")),
+                            "docx_path": (None if slots.get("no_brief")
+                                          else ctx.results.get("brief", {}).get("docx_path")),
+                            "note": ctx.results.get("no_figs_note") or "",
+                        },
                         "fusion": _fusion_brief(ctx.results.get("fusion") or {}),
                         "data_quality": (ctx.results.get("assess") or {}).get(
                             "data_completeness") or None,
@@ -324,6 +357,15 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                   "only_date": (wind.get("stats") or {}).get("only_date"),
                   } if wind else {}),
         "wind_figure": ctx.results.get("wind_figure_facts") or None,
+        # ⭐ 输出控制开关的执行情况（供模型如实确认："已按要求不出图/不出简报"）
+        "output_control": {
+            "no_brief": bool(slots.get("no_brief")),
+            "no_figs": bool(slots.get("no_figs")),
+            "images_skipped": bool((ctx.results.get("visualize") or {}).get("skipped")),
+            "docx_path": (None if slots.get("no_brief")
+                          else ctx.results.get("brief", {}).get("docx_path")),
+            "note": ctx.results.get("no_figs_note") or "",
+        },
         # ⭐ 第五组融合产品（总水位 / 有效波高）：工具返回里带上，供模型如实说明口径
         "fusion": _fusion_brief(ctx.results.get("fusion") or {}),
         # ⭐ 数据完整性（缺站点总水位/天文潮/官方预警时，不许下"无风险"级结论）

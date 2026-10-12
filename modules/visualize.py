@@ -236,6 +236,12 @@ def _mark_point(ax, ctx: ModuleContext):
 
 def run(ctx: ModuleContext) -> ModuleContext:
     images = []
+    # ⭐ 用户明确说"不要图片" → 一张都不出（连课题三成品图也不附），并留一句说明
+    if ctx.request.get("no_figs"):
+        print("[visualize] 用户要求不生成图片，跳过全部出图")
+        ctx.results["visualize"] = {"images": [], "skipped": "no_figs"}
+        ctx.results["no_figs_note"] = "（按您的要求：本次不生成任何图片。）"
+        return ctx
     try:
         import matplotlib
         matplotlib.use("Agg")
