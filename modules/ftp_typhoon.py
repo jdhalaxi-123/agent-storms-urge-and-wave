@@ -19,7 +19,7 @@
     cropped/ortho 场：output_0 = 潮驱动 = **天文潮**；output_4 = 风+潮驱动 = **总水位**
                       两者相减 = **风暴增水**
     irregular 网格  ：elev_tide / elev_surge / elev_all 三个变量直接对应 天文潮 / 增水 / 总水位
-    课题三 场/单点  ：surge / storm_surge 直接是**纯增水**（cm）
+    人工智能方法 场/单点  ：surge / storm_surge 直接是**纯增水**（cm）
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from orchestrator.contract import ModuleContext
 # 数据完整（10/10 或 9/10）的台风
 COMPLETE_TYPHOONS = ["1513", "1521", "1601", "1614", "1617", "1709", "1808", "2305", "2311", "2403"]
 
-# 课题三单点站号 <-> 中文名 <-> 坐标（坐标同 2526 单点数据权威值）
+# 人工智能方法单点站号 <-> 中文名 <-> 坐标（坐标同 2526 单点数据权威值）
 STATIONS: Dict[str, Dict[str, Any]] = {
     "厦门": {"code": "XMN", "lon": 118.25, "lat": 24.50},
     "崇武": {"code": "CWU", "lon": 119.00, "lat": 25.00},
@@ -71,7 +71,7 @@ def _time_axis(ds, base_hint: Optional[datetime.datetime] = None):
       - datetime64：直接取
       - 数字 + 小时（如 'hours since 2015-08-07'）
       - 数字 + **秒**（如裁剪场 300, 3900, … 步长 3600）→ 需按秒换算；
-        裁剪场没有 units 属性，此时用 base_hint（同台风的课题三场起始日期）兜底。
+        裁剪场没有 units 属性，此时用 base_hint（同台风的人工智能方法场起始日期）兜底。
     """
     if "time" not in ds.variables:
         return base_hint, 1.0
@@ -95,7 +95,7 @@ def _time_axis(ds, base_hint: Optional[datetime.datetime] = None):
 
 
 def _window_hint(typhoon: str) -> Optional[datetime.datetime]:
-    """从课题三场文件名（storm_surge_forecast_YYYYMMDD-YYYYMMDD.nc）取起始日期作时间基准。"""
+    """从人工智能方法场文件名（storm_surge_forecast_YYYYMMDD-YYYYMMDD.nc）取起始日期作时间基准。"""
     cat = fc.catalog(typhoon)
     src = cat.get("sources", {}).get("surge_field") or {}
     for f in src.get("files", []):
@@ -189,7 +189,7 @@ def load_station_surge(typhoon: str, stations: Optional[List[str]] = None,
                 "start_dt": base0,
                 "series_cm": [round(v, 2) if np.isfinite(v) else None for v in series],
                 "source_files": used,
-                "source_kind": "课题三 单点增水（每日一个文件）",
+                "source_kind": "人工智能方法单点增水（每日一个文件）",
             })
     return out
 
@@ -198,7 +198,7 @@ def load_station_surge(typhoon: str, stations: Optional[List[str]] = None,
 # ② 全场增水（2 MB）
 # --------------------------------------------------------------------------- #
 def load_surge_field(typhoon: str, target_date: Optional[datetime.date] = None) -> Optional[Dict[str, Any]]:
-    """读取课题三全场增水（cm），返回最近一次预报的二维最大增水场 + 时间轴信息。"""
+    """读取人工智能方法全场增水（cm），返回最近一次预报的二维最大增水场 + 时间轴信息。"""
     import xarray as xr
 
     cat = fc.catalog(typhoon)
@@ -243,7 +243,7 @@ def load_surge_field(typhoon: str, target_date: Optional[datetime.date] = None) 
         "n_hours": int(arr.shape[2]),
         "peak_dt": (base + datetime.timedelta(hours=peak_hour * step)) if base else None,
         "max_cm": round(float(np.nanmax(mx)), 1),
-        "source_file": f["name"], "source_kind": "课题三 全场增水 0.25°（2 MB）",
+        "source_file": f["name"], "source_kind": "人工智能方法全场增水 0.25°（2 MB）",
         "date_filtered": target_date.strftime("%Y-%m-%d") if target_date else "",
     }
 

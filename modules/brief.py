@@ -83,7 +83,7 @@ def _wind_markdown(ctx: ModuleContext, wind: Dict[str, Any],
     if st.get("lon_range"):
         L.append(f"- 范围：{st['lon_range'][0]}~{st['lon_range'][1]}°E，"
                  f"{st['lat_range'][0]}~{st['lat_range'][1]}°N")
-    L += ["", f"- 数据来源：课题三每日风场（{wind.get('file')}，"
+    L += ["", f"- 数据来源：人工智能方法每日风场（{wind.get('file')}，"
               f"{wind.get('size_mb')} MB），为 AI 风暴潮/海浪预报的驱动风场。"]
     if st.get("tz_note"):
         L.append(f"- {st.get('tz_note')}")
@@ -94,7 +94,7 @@ def _wind_markdown(ctx: ModuleContext, wind: Dict[str, Any],
 
 
 def _fusion_markdown(ctx: ModuleContext, fus: Dict[str, Any]) -> str:
-    """第五组融合产品小节：总水位 / 有效波高（含量值、时刻、判级、口径）。"""
+    """融合产品小节：总水位 / 有效波高（含量值、时刻、判级、口径）。"""
     L: List[str] = []
     for kind in ("tide", "wave"):
         v = fus.get(kind) or {}
@@ -104,7 +104,7 @@ def _fusion_markdown(ctx: ModuleContext, fus: Dict[str, Any]) -> str:
             continue
         name = v.get("name") or ctx.request.get("region") or "目标点"
         if kind == "tide":
-            L += [f"## {name} 风暴潮总水位（第五组融合产品）", ""]
+            L += [f"## {name} 风暴潮总水位（融合产品）", ""]
             L.append(f"- **过程最高总水位 {d.get('max_m')} m（{(d.get('max_m') or 0)*100:.0f} cm）**"
                      f"，最低 {d.get('min_m')} m，变幅 {d.get('range_m')} m")
             L.append(f"- 最高出现在 {_ft(d.get('peak_time'))} UTC"
@@ -123,7 +123,7 @@ def _fusion_markdown(ctx: ModuleContext, fus: Dict[str, Any]) -> str:
             except Exception:
                 pass
         else:
-            L += [f"## {name} 有效波高（第五组融合产品）", ""]
+            L += [f"## {name} 有效波高（融合产品）", ""]
             L.append(f"- **过程最大有效波高 {d.get('max_m')} m**，最低 {d.get('min_m')} m")
             L.append(f"- 最大出现在 {_ft(d.get('peak_time'))} UTC"
                      f"（北京时 {(d.get('peak_time_bjt') or '')[11:]}）")
@@ -137,7 +137,7 @@ def _fusion_markdown(ctx: ModuleContext, fus: Dict[str, Any]) -> str:
         L.append(f"- 取值格点 {d.get('cell_lon')}°E, {d.get('cell_lat')}°N"
                  f"（距站点约 {d.get('dist_km')} km，"
                  f"{'随时间变化' if d.get('varied') else '该格点变化很小'}）")
-        L.append(f"- 口径：第五组融合产品（AI + 数值模式融合），"
+        L.append(f"- 口径：融合产品，"
                  f"{'福建中南部精细 0.0083°' if fld.get('fine') else '全场 0.05°'}；"
                  f"起报 {fld.get('issue')}；覆盖 {_ft((fld.get('times') or [''])[0])} ~ "
                  f"{_ft((fld.get('times') or [''])[-1])} UTC；"
@@ -154,7 +154,7 @@ def _ft(s: Any) -> str:
 
 
 def _with_fusion(ctx: ModuleContext, markdown: str) -> str:
-    """在简报正文后追加"第五组融合产品"小节（挂了才加）。"""
+    """在简报正文后追加"融合产品"小节（挂了才加）。"""
     fus = ctx.results.get("fusion") or {}
     if not fus:
         return markdown

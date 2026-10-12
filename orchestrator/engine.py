@@ -30,7 +30,7 @@ def _fusion_brief(fus: Dict[str, Any]) -> Dict[str, Any]:
         d = v.get("point") or {}
         item = {
             "是什么": ("风暴潮总水位（天文潮+增水）" if kind == "tide" else "有效波高"),
-            "来源": "第五组融合产品（AI + 数值模式融合）",
+            "来源": "融合产品",
             "起报": fld.get("issue") or fld.get("typhoon"),
             "网格": "福建中南部精细 0.0083°" if fld.get("fine") else "全场 0.05°",
             "基准": "平均海平面",
@@ -207,6 +207,7 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                             "note": ctx.results.get("no_figs_note") or "",
                         },
                         "fusion": _fusion_brief(ctx.results.get("fusion") or {}),
+                        "fusion_missing": ctx.results.get("fusion_missing") or None,
                         "data_quality": (ctx.results.get("assess") or {}).get(
                             "data_completeness") or None,
                         "meta": ctx.meta,
@@ -264,7 +265,7 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
     # ⭐ 兜底：站点/场/序列一个都没取到 → 如实说明并请用户给明确位置，
     #    绝不能继续硬编一份"简报"（曾出现"未知海域风暴潮风险简报…橙色预警"这类假结论）
     _g = ctx.results.get("geo_stats") or {}
-    # ⭐ 第五组融合产品也算"有数据"：只要挂上了融合总水位/浪高，就不走"没取到数据"分支
+    # ⭐ 融合产品也算"有数据"：只要挂上了融合总水位/浪高，就不走"没取到数据"分支
     _fus_any = bool(ctx.results.get("fusion"))
     if not (_g.get("sites") or _g.get("field_stats") or _g.get("series") or _fus_any):
         _r = str(slots.get("region") or "").strip()
@@ -366,8 +367,10 @@ def run_with_slots(slots: Dict[str, Any], raw: str = "") -> Dict[str, Any]:
                           else ctx.results.get("brief", {}).get("docx_path")),
             "note": ctx.results.get("no_figs_note") or "",
         },
-        # ⭐ 第五组融合产品（总水位 / 有效波高）：工具返回里带上，供模型如实说明口径
+        # ⭐ 融合产品（总水位 / 有效波高）：工具返回里带上，供模型如实说明口径
         "fusion": _fusion_brief(ctx.results.get("fusion") or {}),
+        # ⭐ 融合产品缺失时：说明"改用人工智能方法"，不能就说"没有"
+        "fusion_missing": ctx.results.get("fusion_missing") or None,
         # ⭐ 数据完整性（缺站点总水位/天文潮/官方预警时，不许下"无风险"级结论）
         "data_quality": (ctx.results.get("assess") or {}).get("data_completeness") or None,
         "meta": ctx.meta,

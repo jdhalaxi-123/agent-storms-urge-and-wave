@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""第五组「融合（fusion）」产品接入。
+"""融合产品接入。
 
 数据位置（课题库 FTP）
 ----------------------
@@ -17,7 +17,7 @@
     hs_ensemble    **有效波高**，单位 m
                    longname = "wave height（fusion）"
 
-口径（第五组答复 + nc 属性）
+口径（融合产品答复 + nc 属性）
 -----------------------------
     - 时间轴：**UTC**，逐时；每日期 144 个时次（6 天），台风个例 288 个（12 天）
     - 基准面：**0 = 平均海平面**（提供方口径）
@@ -590,7 +590,7 @@ def provenance(fld: Dict[str, Any]) -> str:
     if not fld:
         return ""
     grid = "福建中南部精细 0.0083°" if fld.get("fine") else "全场 0.05°"
-    head = (f"第五组融合产品（AI+数值模式融合）· {fld['cn']} · "
+    head = (f"融合产品· {fld['cn']} · "
             f"{'台风个例 ' + fld['typhoon'] if fld.get('typhoon') else '起报 ' + fld['issue']} · "
             f"{grid}")
     if fld.get("stale"):

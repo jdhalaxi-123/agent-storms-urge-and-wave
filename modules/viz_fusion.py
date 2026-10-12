@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""第五组「融合（fusion）」产品的出图。
+"""融合产品的出图。
 
 两类图、两种形态：
     tide（总水位）→ ① 站点/任意点过程曲线（叠四色警戒潮位）
@@ -7,7 +7,7 @@
     wave（有效波高）→ ① 站点/任意点过程曲线（叠海浪分级线）
                       ② 过程最大有效波高空间分布（精细 0.0083° 或全场 0.05°）
 
-图上固定写清：来源（第五组融合）、起报、时段、基准（平均海平面）、时间（UTC + 北京时）、取值格点。
+图上固定写清：来源（融合产品融合）、起报、时段、基准（平均海平面）、时间（UTC + 北京时）、取值格点。
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def _head(fld: Dict[str, Any], kind_cn: str, extra: str = "") -> str:
            else f"起报 {fld.get('issue')}")
     t0 = str(fld.get("times", [""])[0])[:16].replace("T", " ")
     t1 = str(fld.get("times", [""])[-1])[:16].replace("T", " ")
-    return (f"第五组融合产品（AI+数值模式）· {kind_cn} · {src} · {grid}\n"
+    return (f"融合产品· {kind_cn} · {src} · {grid}\n"
             f"{t0} ~ {t1} UTC（北京时 +8）　基准：平均海平面　{extra}")
 
 
@@ -106,7 +106,7 @@ def curve(out_dir: Path, ctx: Any, tag: str, kind: str) -> Tuple[List[str], str]
     fig.savefig(fp, bbox_inches="tight")
     plt.close(fig)
 
-    note = (f"第五组融合产品 · {name} {'总水位' if is_tide else '有效波高'}过程曲线"
+    note = (f"融合产品 · {name} {'总水位' if is_tide else '有效波高'}过程曲线"
             f"（起报 {fld.get('issue')}，{'精细 0.0083°' if fld.get('fine') else '全场 0.05°'}）；"
             f"取值格点 {d.get('cell_lon')}°E/{d.get('cell_lat')}°N（距 {d.get('dist_km')} km）；"
             f"峰值 {d.get('max_m')} m @ {_tlab(fld, k)}；{extra}。"
@@ -188,7 +188,7 @@ def field(out_dir: Path, ctx: Any, tag: str, kind: str) -> Tuple[List[str], str]
     fig.savefig(fp, bbox_inches="tight", dpi=150)
     plt.close(fig)
 
-    note = (f"第五组融合产品 · {'过程最高总水位' if is_tide else '过程最大有效波高'}空间分布"
+    note = (f"融合产品 · {'过程最高总水位' if is_tide else '过程最大有效波高'}空间分布"
             f"（起报 {fld.get('issue')}，{'精细 0.0083°' if fld.get('fine') else '全场 0.05°'}，"
             f"共 {int(np.isfinite(mx).sum())} 个有效格点）；"
             f"全场最高 {vmax:.1f} {'cm' if is_tide else 'm'}。"

@@ -1,4 +1,4 @@
-"""模块③ 危险性评估：对照国标预警标准判级。
+﻿"""模块③ 危险性评估：对照国标预警标准判级。
 
 真实实现：
     输入 geo_stats 的站点统计(max_surge_cm 等)，
@@ -152,7 +152,7 @@ def _freshness_text(ctx, geo: Dict[str, Any]) -> str:
         wind = (getattr(ctx, "results", None) or {}).get("daily_wind") or {}
         d = str(wind.get("date") or "")
         if len(d) == 8:
-            return (f"风场数据：课题三每日风场，起报 {d[:4]}-{d[4:6]}-{d[6:]}，"
+            return (f"风场数据：人工智能方法每日风场，起报 {d[:4]}-{d[4:6]}-{d[6:]}，"
                     f"每日更新（通常前一日 22:00 后上传当天）。")
         return ""
     fresh = (geo or {}).get("freshness") or {}
@@ -169,7 +169,7 @@ def _extra_note(geo: Dict[str, Any], ctx=None) -> str:
     if ftxt:
         parts.append(ftxt)
     if geo.get("ai_daily"):
-        parts.append(f"数据来源：{geo.get('data_source','课题三 每日人工智能预报')}"
+        parts.append(f"数据来源：{geo.get('data_source','人工智能方法')}"
                      f"（起报 {geo.get('forecast_date','')}，"
                      f"{geo.get('forecast_span','')}）。")
     obs = geo.get("observation") or {}
@@ -238,7 +238,7 @@ def _field_brief(ctx: ModuleContext, geo: dict, region: str) -> Optional[Dict[st
     box_txt = f"（{rb[0]}~{rb[1]}°E，{rb[2]}~{rb[3]}°N）" if rb else ""
     title = f"{region}{'海浪' if is_wave else '风暴潮'}{'警报' if lvl != '无' else '预报'}"
     summary = (
-        f"基于课题三每日人工智能预报，{region}海域{box_txt}"
+        f"基于人工智能方法，{region}海域{box_txt}"
         + (f"未来 {hours} 小时内，" if hours else "")
         + f"**过程最大{'有效波高' if is_wave else '风暴增水'}为 {vmax} {unit}**，"
         f"出现在 **{peak_place}**"
@@ -246,7 +246,7 @@ def _field_brief(ctx: ModuleContext, geo: dict, region: str) -> Optional[Dict[st
         f"**空间分布**：{seg_txt}（区域内共 {n} 个有效网格点，分辨率 {grid.get('res')}°）。"
     )
     note = (
-        f"注：本简报为**区域（面）预报**，不是单点预报 —— 数据取自课题三每日人工智能预报场"
+        f"注：本简报为**区域（面）预报**，不是单点预报 —— 数据取自人工智能方法场"
         f"（{'海浪 hs_torch' if is_wave else '风暴潮增水 surge'}），起报日 {geo.get('field_date')}，"
         f"覆盖 {grid.get('lon_min')}~{grid.get('lon_max')}°E / {grid.get('lat_min')}~{grid.get('lat_max')}°N，"
         f"分辨率 {grid.get('res')}°。判级标准："
@@ -337,7 +337,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
     # ---- FTP 台风期间数据：优先用"总水位对照警戒潮位"（业务口径）----
     tt = geo.get("tide_total") or {}
-    # ⭐ 第五组融合产品的"总水位"也按同一口径参与判级（否则会出现
+    # ⭐ 融合产品的"总水位"也按同一口径参与判级（否则会出现
     #    "正文按增水分级说未达阈值、融合小节按总水位说蓝色警戒"两个级别并存）
     _fust = ((ctx.results.get("fusion") or {}).get("tide") or {})
     _fp = _fust.get("point") or {}
@@ -352,7 +352,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
             "name": _fust.get("name") or region,
             "lon": _fp.get("cell_lon"), "lat": _fp.get("cell_lat"),
             "series_total_cm": list(_fp["series_cm"]),
-            "series_surge_cm": _surge_series,       # 课题三 AI 增水（有就一起给）
+            "series_surge_cm": _surge_series,       # 人工智能方法 AI 增水（有就一起给）
             "series_tide_cm": None,
         })
         _st = None
@@ -362,7 +362,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         except Exception:
             _st = None
         tt = {"start_dt": _st, "step_hours": 1.0, "points": _pts,
-              "source_kind": "第五组融合产品 · 总水位（天文潮+增水，基准：平均海平面）"}
+              "source_kind": "融合产品 · 总水位（天文潮+增水，基准：平均海平面）"}
         ctx.results["assess_total_from_fusion"] = True
     tt_map: Dict[str, Any] = {}
     for p in (tt.get("points") or []):
@@ -529,7 +529,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
     #   站点总水位/天文潮/官方预警缺项时，**不允许**输出"不具备成灾条件""全区无风险"
     #   这种确定性结论——只能讲"当前模型（增水）未达预警阈值"，并说清缺口。
     have_total = bool(ftp_warn_sites)
-    # ⭐ 第五组融合产品给了"总水位"（天文潮+增水，基准平均海平面）→ 也算有总水位，
+    # ⭐ 融合产品给了"总水位"（天文潮+增水，基准平均海平面）→ 也算有总水位，
     #    否则会一边展示融合总水位、一边说"未取到总水位"（自相矛盾）
     _fus_tide = (ctx.results.get("fusion") or {}).get("tide") or {}
     if _fus_tide.get("point"):
@@ -543,7 +543,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
     if not have_total:
         _gaps.append("站点总水位（天文潮+增水）本期未取到 → 倒灌风险无法按业务口径判级")
     elif _fus_tide.get("point"):
-        _gaps.append("总水位来自第五组融合产品（基准：平均海平面），与本站警戒潮位（85黄零）"
+        _gaps.append("总水位来自融合产品（基准：平均海平面），与本站警戒潮位（85黄零）"
                      "的口径一致性未做换算")
     if not _tide_date:
         _gaps.append("天文潮（潮位）产品未取到")
@@ -590,8 +590,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
             + ("总水位取自数值场（潮驱动与风+潮驱动相减得增水、相加即总水位），"
                "其基准面与警戒潮位的85黄零基准是否一致尚待核实，故判级结论具参照性。"
                if is_total_level and (geo.get("tide_total") or {}).get("points") else "")
-            + ("**总水位取自第五组融合产品（AI+数值模式融合）**，基准为平均海平面；"
-               "表中的风暴增水为课题三 AI 单点产品，两个量标准不同、不要混用。"
+            + ("**总水位取自融合产品**，基准为平均海平面；"
+               "表中的风暴增水为人工智能方法的单点产品，两个量标准不同、不要混用。"
                if ctx.results.get("assess_total_from_fusion") else "")
             + "最终判级以厦门中心业务化运行结果为准。"
             + ("" if have_total else
@@ -626,8 +626,8 @@ def run(ctx: ModuleContext) -> ModuleContext:
     # 海浪评估（若已统计）
     wave = ctx.results.get("wave_stats", {}) or {}
     want_wave = str(ctx.request.get("disaster", "") or "") == "wave"
-    # ⭐ 若本轮挂了第五组融合浪高 → **以融合为主口径**（与简报里的融合小节一致），
-    #    否则会出现"正文按课题三 AI 浪场说 3.6 m→蓝色预警、融合小节说 1.53 m→未达到"
+    # ⭐ 若本轮挂了融合产品融合浪高 → **以融合为主口径**（与简报里的融合小节一致），
+    #    否则会出现"正文按人工智能方法 AI 浪场说 3.6 m→蓝色预警、融合小节说 1.53 m→未达到"
     #    这种同一条回复里两套数打架（补充测试报告点出的判级不一致）。
     _fusw = (ctx.results.get("fusion") or {}).get("wave") or {}
     _fwp = _fusw.get("point") or {}
@@ -637,7 +637,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         wave["max_hs_m"] = _fwp.get("max_m")
         wave["peak_time"] = (f"{( _fwp.get('peak_time') or '')[5:16]} UTC"
                             if _fwp.get("peak_time") else wave.get("peak_time"))
-        wave["source"] = ("第五组融合产品（AI+数值模式融合）· 有效波高 · "
+        wave["source"] = ("融合产品· 有效波高 · "
                           f"起报 {(_fusw.get('field') or {}).get('issue')} · "
                           f"{'精细 0.0083°' if (_fusw.get('field') or {}).get('fine') else '全场 0.05°'} · "
                           f"格点 {_fwp.get('cell_lon')}°E/{_fwp.get('cell_lat')}°N"

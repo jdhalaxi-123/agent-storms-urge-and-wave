@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
-"""课题三「每日业务化预报」取数器（**人工智能方法**）。
+﻿# -*- coding: utf-8 -*-
+"""人工智能方法「每日业务化预报」取数器（**人工智能方法**）。
 
 数据性质（已核实）
 ------------------
 `/group3/ATM_new/dailyforecast/` 下**全部是人工智能方法的预报结果**，模型为 `CuboidWaveModel`
 （文件属性 `title/institution/source` 均指向该模型，变量名带 `_torch` 后缀）。
 `ATM` 与 `EC` **不是"AI 与数值"之分，而是"同一 AI 模型的两种风场输入"**：
-    ATM → 课题三 `/group3/shared_wind_inputs/atm_forecast_YYYYMMDD.nc`
+    ATM → 人工智能方法 `/group3/shared_wind_inputs/atm_forecast_YYYYMMDD.nc`
     EC  → ECMWF `YYYYMMDDHH00_ECMWF_wind_msl.nc`
 
 可用数据
@@ -243,7 +243,7 @@ def load_surge_field(date: str = "", use_ec: bool = False) -> Optional[Dict[str,
         "n_times": int(arr.shape[0]) if arr.ndim == 3 else 1,
         "date": date, "start_dt": base,
         "file": os.path.basename(lp), "size_mb": round(f["size"] / 1e6, 2),
-        "source": f"课题三 AI 每日预报（CuboidWaveModel 体系）· 起报 {date}",
+        "source": f"人工智能方法每日预报（CuboidWaveModel 体系）· 起报 {date}",
         "path": f["path"],
     }
 
@@ -354,7 +354,7 @@ def load_wave_field(date: str = "", use_ec: bool = False) -> Optional[Dict[str, 
     return {"lat": lat, "lon": lon, "hs_m": hs, "mask": mask, "n_times": int(hs.shape[0]),
             "date": date, "start_dt": base, "file": name,
             "size_mb": round(e["size"] / 1e6, 2), "attrs": src_attrs,
-            "source": f"课题三 AI 海浪预报（{'EC' if use_ec else 'ATM'} 风场驱动）· 起报 {date}",
+            "source": f"人工智能方法 AI 海浪预报（{'EC' if use_ec else 'ATM'} 风场驱动）· 起报 {date}",
             "path": e["path"]}
 
 
@@ -446,7 +446,7 @@ def load_tide_prediction(code: str, date: str = "") -> Optional[Dict[str, Any]]:
             return None
         return {"code": code, "date": date, "times": times, "tide_m": vals,
                 "start_dt": times[0], "n": len(times),
-                "source": f"课题三 天文潮预报 {code} {date}",
+                "source": f"人工智能方法天文潮预报 {code} {date}",
                 "path": e["path"]}
     except Exception as ex:  # noqa: BLE001
         print(f"[ai_daily] 读潮汐预报失败: {ex}")
@@ -499,7 +499,7 @@ def load_point_surge(code: str = "XMN", date: str = "") -> Optional[Dict[str, An
     return {"code": code, "name": SURGE_CODE2CN.get(code, code),
             "series_cm": arr.tolist(), "start_dt": base,
             "n": int(arr.size), "file": f["name"],
-            "source": f"课题三 AI 每日预报 单点增水 {code} {f['start']}~{f['end']}",
+            "source": f"人工智能方法每日预报 单点增水 {code} {f['start']}~{f['end']}",
             "path": f["path"]}
 
 
@@ -609,7 +609,7 @@ def load_point_wave(code: str = "C6W10", date: str = "") -> Optional[Dict[str, A
         row["n"] = len(row.get("series_m") or [])
         arr = np.asarray([v for v in (row.get("series_m") or []) if v is not None], dtype=float)
         row["max_hs_m"] = round(float(arr.max()), 2) if arr.size else None
-        row["source"] = f"课题三 AI 波浪预报 单点 {code} 起报 {d}"
+        row["source"] = f"人工智能方法波浪预报 单点 {code} 起报 {d}"
         row["path"] = target["path"]
         return row
     except Exception as ex:  # noqa: BLE001
@@ -676,7 +676,7 @@ def load_wind(date: str = "", force: bool = False) -> Optional[Dict[str, Any]]:
         "file": os.path.basename(local),
         "date": date,
         "size_mb": round(sz / 1e6, 1),
-        "source": "课题三每日风场 /group3/wind（AI 预报的驱动风场）",
+        "source": "人工智能方法每日风场 /group3/wind（AI 预报的驱动风场）",
     }
     try:
         info["start_dt"] = datetime.datetime.strptime(date, "%Y%m%d")
@@ -697,7 +697,7 @@ def _tstr(tv, i: int) -> str:
 def utc_to_bjt(s: str) -> str:
     """世界时字符串 → 北京时字符串（+8 小时）。
 
-    课题三场的 nc 时间轴是**世界时 UTC**：其生成脚本用
+    人工智能方法场的 nc 时间轴是**世界时 UTC**：其生成脚本用
     `pd.to_datetime(..., utc=True)`，另有一行
     `pred_time = pred_time_utc + timedelta(hours=8)  # 转换为北京时间`，
     绘图轴也标 `时间 (UTC)`。业务上习惯说北京时，所以两个都给，
@@ -998,7 +998,7 @@ def load_fine_surge_field(date: str = "", force: bool = False) -> Optional[Dict[
             "date": d, "start_dt": base, "file": f"surge_predicted_{d}.nc",
             "size_mb": round(sz / 1e6, 1), "path": remote, "local": lp,
             "fine": True, "res": 0.01, "land_masked": True,
-            "source": f"课题三 每日人工智能预报·精细网格(0.01°) 起报 {d}"}
+            "source": f"人工智能方法·精细网格(0.01°) 起报 {d}"}
     _mem[key] = {"t": now, "v": info}
     return info
 
@@ -1013,7 +1013,7 @@ def fine_field_stats(field: Dict[str, Any], box: Optional[tuple] = None) -> Dict
 
 
 # --------------------------------------------------------------------------- #
-# ⑨ 课题三自己出的**成品图**（PNG/GIF）——可直接取用，不必自己画
+# ⑨ 人工智能方法自己出的**成品图**（PNG/GIF）——可直接取用，不必自己画
 #    _2 目录：基于 0.01° 旋转网格（福建中南部），平滑
 #    _1 目录：基于 0.25° 全场网格，方格明显（且台湾是白洞）
 # --------------------------------------------------------------------------- #
@@ -1078,7 +1078,7 @@ def _tif_to_png(tif_path: str) -> Optional[str]:
 
 
 def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict[str, Any]]:
-    """取回课题三的成品图，返回 {path,date,kind,file,grid,size_mb}。
+    """取回人工智能方法的成品图，返回 {path,date,kind,file,grid,size_mb}。
 
     kind:
         field_max   _2 最大增水场图（0.01°，福建中南部）   surge_max_YYYYMMDD.png
@@ -1091,7 +1091,7 @@ def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict
     code = str(code or "XMN").upper()
     cn = STATION_CN_FULL.get(code, "厦门")
 
-    # ⭐ 对方（课题三）**只有两张成品动图**：AutoWave/gifs_output 里
+    # ⭐ 对方（人工智能方法）**只有两张成品动图**：AutoWave/gifs_output 里
     #    ATM*(全场预报) 与 EC*(EC 预报) 的风+浪双面板。
     #    spatiotemporal 目录下的 surge_animation*/wind_surge_double* **不是他们的成品**，
     #    已按用户指认停用，避免"乱挪用结果"。
@@ -1184,7 +1184,7 @@ def fetch_product(kind: str, code: str = "XMN", date: str = "") -> Optional[Dict
         d, e = b
         lp = fc.fetch(e["path"], expected_size=e["size"])
         return ({"path": lp, "date": d, "kind": kind, "file": e["name"],
-                 "size_mb": round(e["size"] / 1e6, 2), "grid": "浮标单点（课题三成品图）"}
+                 "size_mb": round(e["size"] / 1e6, 2), "grid": "浮标单点（人工智能方法成品图）"}
                 if lp else None)
 
     if kind in ("field_max", "timeseries", "anim"):
@@ -1251,7 +1251,7 @@ def overview() -> Dict[str, Any]:
         "wave_field_n": len(wd),
         "tide_dates": td[-6:], "tide_latest": td[-1] if td else "", "tide_n": len(td),
         "wind_dates": nd[-6:], "wind_latest": nd[-1] if nd else "", "wind_n": len(nd),
-        "source": "课题三 /group3/ATM_new/dailyforecast + /group3/wind（人工智能方法）",
+        "source": "人工智能方法 /group3/ATM_new/dailyforecast + /group3/wind（人工智能方法）",
     }
 
 
@@ -1333,7 +1333,7 @@ def update_info(now: Optional[datetime.datetime] = None, kind: str = "surge") ->
         lag = (d_today - d_latest).days
         info["note_today"] = (
             f"⏰ **数据时效提醒**：今日（{today[:4]}-{today[4:6]}-{today[6:]}）的预报**尚未更新**"
-            f"（课题三每日人工智能预报{UPDATE_SCHEDULE}发布），"
+            f"（人工智能方法{UPDATE_SCHEDULE}发布），"
             f"最近一次为**起报 {info.get('latest_start', '')}**"
             + (f"，生成于 {info['generated_at']}" if info.get("generated_at") else "")
             + f"，滞后 {lag} 天。以下结果为该次预报，覆盖至 {info.get('cover_end', '')}。"
@@ -1418,7 +1418,7 @@ def date_check(target_date: str, now: Optional[datetime.datetime] = None,
                 info["note_target"] = (
                     f"⏰ **数据时效提醒**：{info['target_date']} 超出最近一次预报的覆盖范围"
                     f"（起报 {info.get('latest_start','')}，覆盖至 {info.get('cover_end','')}）。"
-                    f"课题三每日人工智能预报{UPDATE_SCHEDULE}发布，"
+                    f"人工智能方法{UPDATE_SCHEDULE}发布，"
                     f"{info['target_date']} 的预报尚未更新。以下展示最近一次预报的结果。"
                 )
         except Exception:

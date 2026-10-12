@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""扩展图型：对齐课题三投产图的三种出图。
+"""扩展图型：对齐人工智能方法投产图的三种出图。
 
 1. `draw_wind_wave_pair`  风+浪双联图（左风速+风矢+风级线，右有效波高+海况线）
 2. `draw_wind_wave_gif`   风+浪动图（逐帧渲染 → PIL 存 GIF，不依赖 imagemagick）
@@ -289,11 +289,11 @@ def draw_wind_wave_gif(OUT_DIR: Path, ctx, tag: str, *, max_frames: int = 40,
 
 
 # --------------------------------------------------------------------------- #
-# ②' 直接取用课题三自己出的**成品图**（官方版本）
+# ②' 直接取用人工智能方法自己出的**成品图**（官方版本）
 # --------------------------------------------------------------------------- #
 def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
                              mode: str = "auto") -> List[str]:
-    """取课题三自己出的成品图，供对话直接展示（不必自己重画）。
+    """取人工智能方法自己出的成品图，供对话直接展示（不必自己重画）。
 
     - 默认：0.01° 的最大增水场图 + 该站的 0.01° 站点时序图（平滑、权威）
     - want_anim=True：附带风+增水双面板动图或增水动图（约 18~20 MB，较慢）
@@ -344,24 +344,24 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
 
     # 每张成品图的**准确说明**（交给模型照说，避免它把场图/场动图说成"某站的图"）
     _NOTES = {
-        "field_max": "课题三成品图 · 0.01° 最大增水场图（福建中南部，非单站）",
-        "field_max_1": "课题三成品图 · 0.25° 全场最大增水场图（非单站）",
-        "station_fig": "课题三成品图 · **站点预报系统**单站风暴潮过程曲线（单站）",
-        "ec_field_max": "课题三成品图 · **EC(ECMWF) 强迫** 0.01° 最大增水场图（福建中南部）",
-        "ec_timeseries": "课题三成品图 · **EC(ECMWF) 强迫** 0.01° 站点增水时序图（单站）",
-        "ec_anim": "课题三成品动图 · **EC(ECMWF) 强迫** 0.01° 增水动图",
-        "ec_field_max_1": "课题三成品图 · **EC(ECMWF) 强迫** 0.25° 全场最大增水场图",
-        "ec_anim_1": "课题三成品动图 · **EC(ECMWF) 强迫** 0.25° 全场增水动图",
-        "ec_wind_surge": "课题三成品动图 · **EC(ECMWF) 强迫** 0.25° 风+增水联合动图",
-        "timeseries": "课题三成品图 · 0.01° 站点增水时序图（单站，时空模型）",
-        "curve_1": "课题三成品图 · 0.25° 站点增水曲线图（单站）",
-        "wave_double": "课题三成品动图 · **全场预报** 风+浪双面板动图",
-        "wave_double_ec": "课题三成品动图 · **EC 预报** 风+浪双面板动图",
-        "buoy_viz": "课题三成品图 · 浮标单点海浪图（单点）",
+        "field_max": "人工智能方法成品图 · 0.01° 最大增水场图（福建中南部，非单站）",
+        "field_max_1": "人工智能方法成品图 · 0.25° 全场最大增水场图（非单站）",
+        "station_fig": "人工智能方法成品图 · **站点预报系统**单站风暴潮过程曲线（单站）",
+        "ec_field_max": "人工智能方法成品图 · **EC(ECMWF) 强迫** 0.01° 最大增水场图（福建中南部）",
+        "ec_timeseries": "人工智能方法成品图 · **EC(ECMWF) 强迫** 0.01° 站点增水时序图（单站）",
+        "ec_anim": "人工智能方法成品动图 · **EC(ECMWF) 强迫** 0.01° 增水动图",
+        "ec_field_max_1": "人工智能方法成品图 · **EC(ECMWF) 强迫** 0.25° 全场最大增水场图",
+        "ec_anim_1": "人工智能方法成品动图 · **EC(ECMWF) 强迫** 0.25° 全场增水动图",
+        "ec_wind_surge": "人工智能方法成品动图 · **EC(ECMWF) 强迫** 0.25° 风+增水联合动图",
+        "timeseries": "人工智能方法成品图 · 0.01° 站点增水时序图（单站，时空模型）",
+        "curve_1": "人工智能方法成品图 · 0.25° 站点增水曲线图（单站）",
+        "wave_double": "人工智能方法成品动图 · **全场预报** 风+浪双面板动图",
+        "wave_double_ec": "人工智能方法成品动图 · **EC 预报** 风+浪双面板动图",
+        "buoy_viz": "人工智能方法成品图 · 浮标单点海浪图（单点）",
     }
 
     def _note(p):
-        _t = _NOTES.get(str((p or {}).get("kind") or ""), "课题三成品图")
+        _t = _NOTES.get(str((p or {}).get("kind") or ""), "人工智能方法成品图")
         _d = str((p or {}).get("date") or "")
         _s = f"{_t}（产品日期 {_d}）" if _d else _t
         if (p or {}).get("converted_from"):
@@ -504,7 +504,7 @@ def attach_official_products(ctx, code: str = "XMN", *, want_anim: bool = False,
 def _pairs_from_ctx(ctx) -> Tuple[np.ndarray, np.ndarray, str, str]:
     """为台风个例配出 (预报, 实测) 对：浮标有效波高。
 
-    预报：`geo_stats["wave_points"]`（课题三浮标点波高，逐站序列）
+    预报：`geo_stats["wave_points"]`（人工智能方法浮标点波高，逐站序列）
     实测：课题五观测文件 `wave_H`（二维：时间×站，站号在 `sta_id`）
     两者按时间轴对齐（起点差 ≤1.5h、步长一致）后逐点配对。
     """
@@ -568,7 +568,7 @@ def _pairs_from_ctx(ctx) -> Tuple[np.ndarray, np.ndarray, str, str]:
 
 
 def draw_validation_density(OUT_DIR: Path, ctx, tag: str) -> List[str]:
-    """预报 vs 实测 密度散点（课题三 metrics_plotter 风格：viridis + LogNorm + 指标框）。"""
+    """预报 vs 实测 密度散点（人工智能方法 metrics_plotter 风格：viridis + LogNorm + 指标框）。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.colors as mcolors

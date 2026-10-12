@@ -65,7 +65,7 @@ def _tag(ctx: ModuleContext) -> str:
 
 
 def _draw_ai_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> str:
-    """场查询：区域内**过程最大增水/浪高**空间分布（课题三投产图样式）。
+    """场查询：区域内**过程最大增水/浪高**空间分布（人工智能方法投产图样式）。
 
     - cartopy 底图 + Natural Earth 海岸线 + 灰色陆地
     - `jet` 配色：浪高固定 0~8 m，增水按量级取整
@@ -236,7 +236,7 @@ def _mark_point(ax, ctx: ModuleContext):
 
 def run(ctx: ModuleContext) -> ModuleContext:
     images = []
-    # ⭐ 用户明确说"不要图片" → 一张都不出（连课题三成品图也不附），并留一句说明
+    # ⭐ 用户明确说"不要图片" → 一张都不出（连人工智能方法成品图也不附），并留一句说明
     if ctx.request.get("no_figs"):
         print("[visualize] 用户要求不生成图片，跳过全部出图")
         ctx.results["visualize"] = {"images": [], "skipped": "no_figs"}
@@ -254,7 +254,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         tag = _tag(ctx)
         OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-        # ===== 先判定：这一问该用「课题三的成品图」还是「自己画」 =====
+        # ===== 先判定：这一问该用「人工智能方法的成品图」还是「自己画」 =====
         #   站点 / 全场·大范围（跨度 >4°）→ 用他们出好的业务图（权威、平滑）；
         #   局地（闽南、厦门沿海…，跨度 ≤4° 或模式点取景）→ 他们没局地数据，自己画。
         _g0 = ctx.results.get("geo_stats") or {}
@@ -276,7 +276,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
             try:
                 from . import viz_extra
                 _official = list(viz_extra.attach_official_products(ctx) or [])
-                print(f"[visualize] 采用课题三成品图 {len(_official)} 张: "
+                print(f"[visualize] 采用人工智能方法成品图 {len(_official)} 张: "
                       f"{[Path(str(x)).name for x in _official]}")
             except Exception as e:  # noqa: BLE001
                 print(f"[visualize] 取官方成品图失败，改自绘: {e}")
@@ -299,7 +299,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
                 return disaster != "wave"
             return False
 
-        # ===== 第五组融合产品：总水位 / 有效波高（曲线 + 场图）=====
+        # ===== 融合产品：总水位 / 有效波高（曲线 + 场图）=====
         #   "目前先用融合后的数据"：挂了融合就出它的图，并**不再重复出 AI 版的同类图**
         _fus = ctx.results.get("fusion") or {}
         _fus_kinds = [k for k in ("tide", "wave") if _fus.get(k)]
@@ -339,7 +339,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         # 自绘图范围（用户口径）= 区域场分布图 + **点名地点的海浪过程曲线**。
         #   · 「厦门海浪」「崇武的海浪」这类点名地点 → 画这条曲线（FTP 上没有对应成品图）
         #   · 「闽南的海浪场」这类要"场"的 → 只出自绘区域场图，不画曲线
-        #   · 全场/浮标站号 → 用课题三成品（动图/单点图），不重复自绘
+        #   · 全场/浮标站号 → 用人工智能方法成品（动图/单点图），不重复自绘
         if ((want("wave") or plot in ("gif", "animation", "动图", "动画", "wind_wave"))
                 and not _official and not ctx.request.get("field_query")
                 and "wave" not in _fus_kinds):
@@ -424,7 +424,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
             except Exception as e:  # noqa: BLE001
                 _fail(ctx, "动图", e)
 
-        # ===== 课题三自己出的成品图（前面已判定并取回） =====
+        # ===== 人工智能方法自己出的成品图（前面已判定并取回） =====
         if _official:
             images.extend(_official)
 
@@ -474,7 +474,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         for _p in images:
             _k = str(_p)
             if _k in _notes:
-                continue                       # 课题三成品图已有更准确的说明
+                continue                       # 人工智能方法成品图已有更准确的说明
             _b = Path(_k).name
             for _pre, _txt in _SELF:
                 if _b.startswith(_pre):
@@ -517,7 +517,7 @@ def _fail(ctx, where: str, e: Exception) -> None:
 
 
 def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str:
-    """站点增水过程曲线：对齐课题三投产图版式
+    """站点增水过程曲线：对齐人工智能方法投产图版式
     （14.8×4.8、dpi150、时间轴 `%m%d %H:%M`、英文月日刻度），
     并保留我们的**四色警戒参考线**（他们业务图里没有，是我们的加分项）。
     """
@@ -532,7 +532,7 @@ def _draw_surge(OUT_DIR: Path, sites: list, ctx: ModuleContext, tag: str) -> str
     is_wave = str(ctx.request.get("disaster", "")) == "wave"
     path = OUT_DIR / (f"wave_series_{tag}.png" if is_wave else f"surge_series_{tag}.png")
 
-    # 版式完全对齐课题三 ywh.py：
+    # 版式完全对齐人工智能方法 ywh.py：
     #   figsize=(14.8,4.8) / 蓝线 'b' linewidth=2.0 / 轴标签 fontsize=14 /
     #   标题 f'{站号}-{起}-{止}' 加粗 / DayLocator + '%m%d %H:%M' / dpi=150
     fig, ax = plt.subplots(figsize=(14.8, 4.8))
@@ -1230,7 +1230,7 @@ def _draw_wind_field(OUT_DIR: Path, ctx: ModuleContext, tag: str) -> list:
     typh = str(ctx.request.get("typhoon", "") or "")
     tlabel = best["tlabel"]
 
-    # ===== 出图：课题三投产图样式（cartopy 底图 + jet + 风级等值线）=====
+    # ===== 出图：人工智能方法投产图样式（cartopy 底图 + jet + 风级等值线）=====
     import cartopy.crs as ccrs
     from . import plotstyle
 

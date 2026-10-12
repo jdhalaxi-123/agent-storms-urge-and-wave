@@ -998,7 +998,7 @@ def _parse_window_hours(tw: str) -> Optional[int]:
 # ⑤ 场查询（区域查询）：大范围地名 → 出场分布 + 空间统计
 # --------------------------------------------------------------------------- #
 def _run_field_query(ctx: ModuleContext, box: list, region: str) -> Optional[Dict[str, Any]]:
-    """用课题三「每日 AI 预报」的场数据回答区域性问题。
+    """用人工智能方法「每日 AI 预报」的场数据回答区域性问题。
 
     - 风暴潮：`surge_pred_atm_forecast_*.nc`（168h, 0.25°, `surge` cm）
     - 海浪  ：`YYYYMMDD_wave_forecast_1h.nc`（144h, `hs_torch` m）
@@ -1084,7 +1084,7 @@ def _run_field_query(ctx: ModuleContext, box: list, region: str) -> Optional[Dic
                          "res": round(float(abs(lon[1] - lon[0])) if lon.size > 1 else 0.25, 3)}
     geo["field_source"] = fld.get("source", "")
     geo["field_date"] = fld.get("date", "")
-    geo["data_source"] = "课题三 每日人工智能预报"
+    geo["data_source"] = "人工智能方法"
     geo["freshness"] = fresh
     if start and len(series):
         geo["data_start"] = start.strftime("%Y-%m-%d %H:%M")
@@ -1095,7 +1095,7 @@ def _run_field_query(ctx: ModuleContext, box: list, region: str) -> Optional[Dic
 
 
 # --------------------------------------------------------------------------- #
-# ⑥ 常规（非台风个例）单点查询：课题三每日 AI 预报 + 天文潮 → 总水位
+# ⑥ 常规（非台风个例）单点查询：人工智能方法每日 AI 预报 + 天文潮 → 总水位
 # --------------------------------------------------------------------------- #
 def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optional[Dict[str, Any]]:
     """不带台风号的常规查询 → 用**当天的**AI 预报。
@@ -1125,13 +1125,13 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
                             "lon": None, "lat": None, "start_dt": start,
                             "series_cm": [], "series_full": [],
                             "series_wave_m": ser,
-                            "data_kind": f"课题三 AI 海浪单点（浮标站 {hit}）"}
+                            "data_kind": f"人工智能方法海浪单点（浮标站 {hit}）"}
                     geo = _finalize([site], region, "ai_point", pw.get("file", ""))
                     geo["point_query"] = True
                     geo["ai_daily"] = True
                     geo["buoy_point"] = True
                     geo["point_name"] = hit
-                    geo["data_source"] = "课题三 每日人工智能预报 · 海浪单点（浮标）"
+                    geo["data_source"] = "人工智能方法 · 海浪单点（浮标）"
                     geo["field_date"] = pw.get("date", "")
                     n = len(ser)
                     if start and n:
@@ -1144,7 +1144,7 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
                           "max_hs_m": pw.get("max_hs_m"),
                           "peak_time": (start + datetime.timedelta(hours=k)).strftime("%m-%d %H:%M") if start else "",
                           "station": hit, "n_stations": len(codes),
-                          "source": f"课题三 海浪单点（浮标站 {hit}）"}
+                          "source": f"人工智能方法 海浪单点（浮标站 {hit}）"}
                     if pw.get("period_s"):
                         try:
                             ws["mwp_max"] = round(float(np.nanmax(
@@ -1212,7 +1212,7 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
                 "series_cm": [], "series_full": [],
                 "series_wave_m": [None if not np.isfinite(v) else round(float(v), 2)
                                   for v in series],
-                "data_kind": (f"课题三 AI 海浪场（最近有效海上格点 "
+                "data_kind": (f"人工智能方法海浪场（最近有效海上格点 "
                               f"{pt_lon:.2f}°E, {pt_lat:.2f}°N，距 {lb} 约 {dist_km:.0f} km）")}
         geo = _finalize([site], region, "ai_point", fld.get("file", ""))
         geo["point_query"] = True
@@ -1224,7 +1224,7 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
         geo["point_grid"] = {"lon": pt_lon, "lat": pt_lat, "dist_km": dist_km,
                              "grid_res": "0.352°×0.238°（约35×26 km）",
                              "nearest_valid": True}
-        geo["data_source"] = "课题三 每日人工智能预报"
+        geo["data_source"] = "人工智能方法"
         geo["field_date"] = fld.get("date", "")
         geo["freshness"] = fresh
 
@@ -1267,7 +1267,7 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
                 "peak_hour": k,
                 "peak_time": peak_t,
                 # 注意：这里是**模式场最近有效海上格点**，不是浮标站，不要写成"浮标站 XXX"
-                "source": (f"课题三 每日 AI 海浪场（{lb} 最近有效海上格点 "
+                "source": (f"人工智能方法 每日 AI 海浪场（{lb} 最近有效海上格点 "
                            f"{pt_lon:.2f}°E, {pt_lat:.2f}°N，距 {dist_km:.0f} km，"
                            f"网格约 35×26 km）"),
                 "point_name": lb,
@@ -1275,7 +1275,7 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
                 #    任意地点没有逐点检验结果 → 如实写"暂无"，不要暗示有误差统计
                 "verification": ("暂无逐点检验样本（本系统仅在数据完整的台风个例上做过"
                                  "预报-实测对照）"),
-                "product": "课题三 每日人工智能预报（AI 海浪场）",
+                "product": "人工智能方法（AI 海浪场）",
                 "issue_time": (start.strftime("%Y-%m-%d %H:%M") if start else ""),
                 "grid_res": "约 0.352°×0.238°（35×26 km）",
             }
@@ -1334,13 +1334,13 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
         "lon": None, "lat": None, "start_dt": start,
         "series_cm": surge.tolist(),
         "series_full": _fill_gaps(surge).tolist(),
-        "data_kind": "课题三 AI 每日预报 · 单点风暴增水",
+        "data_kind": "人工智能方法每日预报 · 单点风暴增水",
     }
     geo = _finalize([site], region, "ai_point", ps.get("file", ""))
     geo["custom_point"] = False
     geo["ai_daily"] = True
     geo["freshness"] = fresh
-    geo["data_source"] = "课题三 每日人工智能预报"
+    geo["data_source"] = "人工智能方法"
     geo["forecast_date"] = ps["start_dt"].strftime("%Y-%m-%d")
     geo["forecast_span"] = f"{ps['start_dt']:%Y-%m-%d %H:%M} ~ "
     if surge.size:
@@ -1359,19 +1359,19 @@ def _run_ai_point_query(ctx: ModuleContext, region: str, target_date) -> Optiona
                 "series_total_cm": [None if not np.isfinite(v) else round(float(v), 1) for v in total],
                 "series_surge_cm": [round(float(v), 1) for v in surge],
             }],
-            "source_kind": "课题三 AI 单点增水 + 天文潮预报（相加得总水位）",
+            "source_kind": "人工智能方法单点增水 + 天文潮预报（相加得总水位）",
         }
     return geo
 
 
 def _wants_fusion(ctx: ModuleContext) -> list:
-    """这一问要不要用第五组融合产品？返回要挂的 kind 列表（tide / wave）。
+    """这一问要不要用融合产品？返回要挂的 kind 列表（tide / wave）。
 
     规则（"目前先用融合后的数据"）：
       - 问**水位/潮位/总水位/倒灌/警戒** → tide（融合的总水位 = 天文潮+增水）
       - 问**浪/波高/海浪**（或灾种=wave）    → wave（融合的有效波高）
       - 用户原话里出现"融合" → 两个都挂
-    （问"增水"不挂 tide：融合产品里没有单独的增水变量，增水仍用课题三 AI 单点。）
+    （问"增水"不挂 tide：融合产品里没有单独的增水变量，增水仍用人工智能方法单点。）
     """
     raw = str(ctx.request.get("raw", "") or "")
     dis = str(ctx.request.get("disaster", "") or "")
@@ -1395,7 +1395,7 @@ def _wants_fusion(ctx: ModuleContext) -> list:
 
 
 def _attach_fusion(ctx: ModuleContext) -> None:
-    """按需挂上第五组融合产品（总水位 / 有效波高）：场 + 站点/任意点序列。"""
+    """按需挂上融合产品（总水位 / 有效波高）：场 + 站点/任意点序列。"""
     try:
         from . import fusion as F
         from orchestrator import geo_domain as _gd
@@ -1443,11 +1443,16 @@ def _attach_fusion(ctx: ModuleContext) -> None:
             if not fld:
                 fld = F.load(kind, issue=issue, fine=not fine)
             if not fld:
-                print(f"[geo_stats] 融合 {kind} 取数失败（可能还没上传）")
+                # ⭐ 融合产品没有/取不到 → 记下来，让回复如实说明并**改用人工智能方法**的
+                #    对应产品（水位→增水分级；浪高→人工智能海浪场），不能就说"没有"
+                ctx.results.setdefault("fusion_missing", {})[kind] = (
+                    "融合产品本期没有这一项（或课题库暂时取不到）")
+                print(f"[geo_stats] 融合 {kind} 取数失败 → 记为缺失，改走人工智能方法")
                 continue
             d = F.point(fld, lon, lat)
             if not d:
-                print(f"[geo_stats] 融合 {kind} 取点失败")
+                ctx.results.setdefault("fusion_missing", {})[kind] = "融合产品取不到该点的值"
+                print(f"[geo_stats] 融合 {kind} 取点失败 → 记为缺失")
                 continue
             out[kind] = {"field": fld, "point": d, "name": (_n or name or "目标点"),
                          "provenance": F.provenance(fld)}
@@ -1476,7 +1481,7 @@ def run(ctx: ModuleContext) -> ModuleContext:
         except Exception as e:  # noqa: BLE001
             print(f"[geo_stats] 每日风场取数失败: {e}")
 
-    # ⭐ 第五组融合产品（总水位 / 有效波高）：用户问水位、潮位、浪高时挂上，
+    # ⭐ 融合产品（总水位 / 有效波高）：用户问水位、潮位、浪高时挂上，
     #    出图与简报直接用它的数据（"目前先用融合后的数据"）
     if not ftp_ty:
         try:
@@ -1738,7 +1743,7 @@ def _run_ftp_typhoon(ctx: ModuleContext, typhoon: str, region: str,
                     "max_surge_cm": sp["max_surge_cm"],
                     "series_cm": [], "series_full": [],
                     "source_file": src_file,
-                    "data_kind": "全场增水按点采样（FTP 课题三场 2MB）",
+                    "data_kind": "全场增水按点采样（FTP 人工智能方法场 2MB）",
                 })
 
     if not sites:
@@ -1779,7 +1784,7 @@ def _run_ftp_typhoon(ctx: ModuleContext, typhoon: str, region: str,
             if tt:
                 geo["tide_total"] = tt
                 # ⭐ 数据范围取各数据源窗口的**并集**：
-                #    站点增水(课题三)与总水位场(裁剪场)窗口不同，
+                #    站点增水(人工智能方法)与总水位场(裁剪场)窗口不同，
                 #    否则会出现"峰值时刻 07-14 但数据范围只到 07-13"的自相矛盾。
                 spans = []
                 try:
@@ -2253,8 +2258,8 @@ def attach_requested_tables(ctx) -> None:
             print(f"[geo_stats] 已按请求窗口生成表："
                   f"{ {k: v['window'] for k, v in tables.items()} }")
         # ⭐ 用户问"潮位"，但对方天文潮产品没更新到这天 → 如实说明，别拿增水顶
-        #    若已经挂了第五组融合总水位，则改口径：水位用融合总水位（含天文潮），
-        #    不再说"给不了潮位"（那条只针对课题三那套停更的天文潮产品）。
+        #    若已经挂了融合产品融合总水位，则改口径：水位用融合总水位（含天文潮），
+        #    不再说"给不了潮位"（那条只针对人工智能方法那套停更的天文潮产品）。
         _raw_l = str(ctx.request.get("raw", "") or "")
         _has_fus_tide = bool((ctx.results.get("fusion") or {}).get("tide"))
         if ("潮位" in _raw_l) and not any("天文潮" in k for k in tables) and not _has_fus_tide:
@@ -2264,17 +2269,28 @@ def attach_requested_tables(ctx) -> None:
             except Exception:  # noqa: BLE001
                 _td = ""
             notes.append(
-                f"你要的是**潮位**，但课题三的「天文潮(潮位)」产品最新只到 "
+                f"你要的是**潮位**，但人工智能方法的「天文潮(潮位)」产品最新只到 "
                 f"{(f'{_td[:4]}-{_td[4:6]}-{_td[6:]}' if _td else '（无）')}，"
                 "此后没有更新，因此**无法给出该日期的逐时潮位**；"
                 "下面表中给出的是**风暴增水**（不是潮位），请勿混用。"
+                + ("　另外，**融合产品本期也没有总水位**（或暂时取不到），"
+                   "本次水位相关结论按人工智能方法的「风暴增水分级（30/50/80/120 cm）」"
+                   "判读，**不是**总水位对照警戒潮位的判级。"
+                   if (ctx.results.get("fusion_missing") or {}).get("tide") else "")
             )
         elif _has_fus_tide and "潮位" in _raw_l:
             notes.append(
-                "**水位（含天文潮）用第五组融合产品的「总水位」**（= 天文潮 + 增水，"
-                "基准：平均海平面，时间 UTC）；课题三那套「天文潮(潮位)」产品自 "
-                "2026-07-08 后已停更。表中的**风暴增水**是另一路（课题三 AI 单点），"
+                "**水位（含天文潮）用融合产品的「总水位」**（= 天文潮 + 增水，"
+                "基准：平均海平面，时间 UTC）；人工智能方法那套「天文潮(潮位)」产品自 "
+                "2026-07-08 后已停更。表中的**风暴增水**是另一路（人工智能方法单点），"
                 "两个量不要混着看。"
+            )
+        elif ("潮位" in _raw_l or "水位" in _raw_l) and \
+                (ctx.results.get("fusion_missing") or {}).get("tide"):
+            notes.append(
+                "**融合产品本期没有总水位**（或课题库暂时取不到）→ 本次水位相关结论"
+                "**改用人工智能方法的增水产品**，按「风暴增水分级（30/50/80/120 cm）」判读，"
+                "**不是**总水位对照警戒潮位的判级；需要总水位判级请等融合产品更新。"
             )
         if notes or why:
             ctx.results["window_note"] = " ".join(notes + ([why] if why else []))
