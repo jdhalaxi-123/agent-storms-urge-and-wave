@@ -337,6 +337,33 @@ def run(ctx: ModuleContext) -> ModuleContext:
 
     # ---- FTP 台风期间数据：优先用"总水位对照警戒潮位"（业务口径）----
     tt = geo.get("tide_total") or {}
+    # ⭐ 第五组融合产品的"总水位"也按同一口径参与判级（否则会出现
+    #    "正文按增水分级说未达阈值、融合小节按总水位说蓝色警戒"两个级别并存）
+    _fust = ((ctx.results.get("fusion") or {}).get("tide") or {})
+    _fp = _fust.get("point") or {}
+    if _fp.get("series_cm"):
+        _pts = list(tt.get("points") or [])
+        _surge_series = None
+        for s in (geo.get("sites") or []):
+            if s.get("series_cm"):
+                _surge_series = list(s["series_cm"])
+                break
+        _pts.append({
+            "name": _fust.get("name") or region,
+            "lon": _fp.get("cell_lon"), "lat": _fp.get("cell_lat"),
+            "series_total_cm": list(_fp["series_cm"]),
+            "series_surge_cm": _surge_series,       # 课题三 AI 增水（有就一起给）
+            "series_tide_cm": None,
+        })
+        _st = None
+        try:
+            _st = datetime.datetime.strptime(
+                str((_fust.get("field") or {}).get("times", [""])[0])[:19], "%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            _st = None
+        tt = {"start_dt": _st, "step_hours": 1.0, "points": _pts,
+              "source_kind": "第五组融合产品 · 总水位（天文潮+增水，基准：平均海平面）"}
+        ctx.results["assess_total_from_fusion"] = True
     tt_map: Dict[str, Any] = {}
     for p in (tt.get("points") or []):
         tot = [v for v in (p.get("series_total_cm") or []) if v is not None]
@@ -563,6 +590,9 @@ def run(ctx: ModuleContext) -> ModuleContext:
             + ("总水位取自数值场（潮驱动与风+潮驱动相减得增水、相加即总水位），"
                "其基准面与警戒潮位的85黄零基准是否一致尚待核实，故判级结论具参照性。"
                if is_total_level and (geo.get("tide_total") or {}).get("points") else "")
+            + ("**总水位取自第五组融合产品（AI+数值模式融合）**，基准为平均海平面；"
+               "表中的风暴增水为课题三 AI 单点产品，两个量标准不同、不要混用。"
+               if ctx.results.get("assess_total_from_fusion") else "")
             + "最终判级以厦门中心业务化运行结果为准。"
             + ("" if have_total else
                "本次未取到站点总水位（天文潮+增水）产品，结论只按风暴增水阈值分级，"
