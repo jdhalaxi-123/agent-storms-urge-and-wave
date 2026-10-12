@@ -1,4 +1,4 @@
-﻿"""LLM 对话大脑：DeepSeek 驱动，支持常识问答 + 预报工具调用（Function Calling）。
+"""LLM 对话大脑：DeepSeek 驱动，支持常识问答 + 预报工具调用（Function Calling）。
 
 职责：
     - 常识/知识类问题（"风暴潮是什么"、"厦门在哪"）→ LLM 直接回答
